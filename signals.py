@@ -55,25 +55,32 @@ def get_seen_signals() -> Set[str]:
 
 
 def check_new_signals(rows: List[dict], platform: str):
-    """Send Telegram alerts for signals we haven't seen before."""
-    from database import db_mark_alert_sent
-    with _seen_lock:
-        for r in rows:
-            key = r.get("sig_key","")
-            if not key or key in _seen_signals: continue
+    """Send Telegram alerts for signals we haven't seen before.
+    Uses DB alert_sent_at as source of truth — not in-memory set.
+    This ensures alerts fire correctly after restarts and between scans.
+    """
+    from database import db_mark_alert_sent, db_get_alerted_keys
+    # Always check DB for what's been alerted — don't rely on in-memory set
+    already_alerted = db_get_alerted_keys()
+
+    for r in rows:
+        key = r.get("sig_key","")
+        if not key or key in already_alerted: continue
+        url = r.get("url") or r.get("market_url","")
+
+        if platform == "kalshi":
+            msg     = format_kalshi_alert(r)
+            buttons = [{"text":"View on Kalshi","url":url}] if url else []
+        else:
+            msg     = format_poly_alert(r)
+            buttons = [{"text":"View on Polymarket","url":url}] if url else []
+
+        tg_send(msg, buttons=buttons or None)
+        # Mark as alerted in DB immediately
+        db_mark_alert_sent(key)
+        # Also update in-memory set
+        with _seen_lock:
             _seen_signals.add(key)
-            url = r.get("url") or r.get("market_url","")
-
-            if platform == "kalshi":
-                msg     = format_kalshi_alert(r)
-                buttons = [{"text":"View on Kalshi","url":url}] if url else []
-            else:
-                msg     = format_poly_alert(r)
-                buttons = [{"text":"View on Polymarket","url":url}] if url else []
-
-            tg_send(msg, buttons=buttons or None)
-            # Mark as alerted in DB so restart-safe dedup works
-            db_mark_alert_sent(key)
 
 
 def check_cluster_alert(cluster: dict):
