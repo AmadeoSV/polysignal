@@ -106,6 +106,25 @@ class PolyPosition(Base):
 
 Base.metadata.create_all(engine)
 
+# ── Migrations — add new columns to existing tables ───────────────────────────
+def _run_migrations():
+    """Add columns that may not exist in older DB instances."""
+    migrations = [
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS alert_sent_at TIMESTAMP",
+        "ALTER TABLE signal_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
+        "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
+    ]
+    with engine.connect() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(__import__('sqlalchemy').text(sql))
+                conn.commit()
+            except Exception as e:
+                if "already exists" not in str(e).lower():
+                    print(f"Migration note: {e}")
+
+_run_migrations()
+
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
 def db_save_signal(sig: dict, platform: str) -> Optional[int]:
@@ -351,6 +370,25 @@ class TraderPriceHistory(Base):
     continued_24h   = Column(Boolean, nullable=True)
 
 Base.metadata.create_all(engine)
+
+# ── Migrations — add new columns to existing tables ───────────────────────────
+def _run_migrations():
+    """Add columns that may not exist in older DB instances."""
+    migrations = [
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS alert_sent_at TIMESTAMP",
+        "ALTER TABLE signal_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
+        "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
+    ]
+    with engine.connect() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(__import__('sqlalchemy').text(sql))
+                conn.commit()
+            except Exception as e:
+                if "already exists" not in str(e).lower():
+                    print(f"Migration note: {e}")
+
+_run_migrations()
 
 
 def db_init_signal_price_history(signal_id: int, ticker: str, platform: str,
