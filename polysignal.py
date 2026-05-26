@@ -15,18 +15,14 @@ from typing import Any, Dict, List, Optional
 import requests
 from flask import Flask, jsonify, render_template_string, request as freq
 
-# Local modules — import modules first to avoid circular imports
-import database
-import kalshi as kal
-import polymarket as poly
-import signals as sig_module
-import telegram_bot
-
+# Local modules
 from database import (engine, db_save_signal, db_get_signals, db_get_trades,
                       db_add_trade, db_close_trade, db_analytics, db_cleanup,
                       db_size_mb, Session, Trade)
+import kalshi as kal
+import polymarket as poly
 from signals import (check_new_signals, check_cluster_alert, fetch_fred_events,
-                     update_open_trade_prices, check_signal_outcomes)
+                     update_open_trade_prices, check_signal_outcomes, send_morning_brief)
 from telegram_bot import tg_send, tg_get_updates, poll_loop
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -129,6 +125,8 @@ def run_kalshi_scan():
         threading.Thread(target=update_open_trade_prices, daemon=True).start()
         threading.Thread(target=db_cleanup, daemon=True).start()
         threading.Thread(target=check_signal_outcomes, daemon=True).start()
+        # Morning brief — runs daily at 8am ET, no-op any other time
+        threading.Thread(target=send_morning_brief, args=(_st,), daemon=True).start()
 
     except Exception as e:
         print(f"Kalshi error: {e}")
@@ -1092,15 +1090,16 @@ fetchAnalytics();
 poll();
 </script></body></html>"""
 
-
-
 if __name__ == "__main__":
     db_url = os.environ.get("DATABASE_URL","")
-    tg_tok = os.environ.get("TELEGRAM_BOT_TOKEN","")
-    fred   = os.environ.get("FRED_API_KEY","")
-    print(f"{'✅' if db_url else 'ℹ️ '} {'PostgreSQL' if db_url else 'SQLite (local)'}")
-    print(f"{'✅' if tg_tok else 'ℹ️ '} {'Telegram configured' if tg_tok else 'No Telegram token'}")
-    print(f"{'✅' if fred else 'ℹ️ '} {'FRED API configured' if fred else 'No FRED key'}")
+    if db_url:
+        print(f"✅ PostgreSQL configured")
+    else:
+        print(f"ℹ️  Using local SQLite")
+    if os.environ.get("TELEGRAM_BOT_TOKEN"):
+        print(f"✅ Telegram configured. Chat: {os.environ.get('TELEGRAM_CHAT_ID','')}")
+    if os.environ.get("FRED_API_KEY"):
+        print(f"✅ FRED API configured")
     print(f"Starting PolySignal → http://localhost:{PORT}")
     threading.Thread(target=scheduler, daemon=True).start()
     threading.Thread(target=poll_loop, args=(_st, handle_cmd), daemon=True).start()

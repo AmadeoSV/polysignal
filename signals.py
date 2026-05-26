@@ -107,6 +107,63 @@ def fetch_fred_events() -> List[dict]:
     return _fred_cache
 
 
+def send_morning_brief(state_ref: dict):
+    """Send a daily morning summary at 8am ET."""
+    from database import db_analytics, db_get_signals
+    from datetime import datetime, timezone
+
+    now_et = datetime.now(timezone.utc)
+    # 8am ET = 12pm or 13pm UTC depending on DST — check hour
+    if now_et.hour not in (12, 13): return
+
+    a      = db_analytics()
+    sigs   = db_get_signals(limit=200)
+    active = [s for s in sigs if s.get("outcome") is None]
+
+    # Group by platform
+    k_sigs = [s for s in active if s["platform"]=="kalshi"]
+    p_sigs = [s for s in active if s["platform"]=="polymarket"]
+
+    # Top poly positions from live state
+    top_poly = state_ref.get("poly_positions",[])[:5]
+    top_k    = state_ref.get("kalshi_signals",[])[:3]
+
+    lines = [
+        "☀️ <b>PolySignal Morning Brief</b>",
+        "━"*20,
+        f"Signals overnight: <b>{len(active)}</b> active ({len(k_sigs)} Kalshi, {len(p_sigs)} Polymarket)",
+        f"Open trades: <b>{a['open_trades']}</b> | PnL: <b>${a['total_pnl']:+.2f}</b>",
+        "",
+    ]
+
+    if top_poly:
+        lines.append("<b>📊 Top Polymarket positions right now:</b>")
+        for r in top_poly[:4]:
+            dom  = round((r.get("dominance",0))*100)
+            mom  = round((r.get("momentum",0))*100,1)
+            icon = "🟢" if dom>=80 else "🟡"
+            lines.append(f"{icon} {r.get('title','')[:45]} | {r.get('traders',0)} traders, {dom}% | +{mom}¢")
+        lines.append("")
+
+    if top_k:
+        lines.append("<b>⚡ Recent Kalshi signals:</b>")
+        for s in top_k:
+            up   = s.get("direction")=="UP"
+            icon = "🟢" if up else "🔴"
+            move = round(s.get("move_abs",0)*100,1)
+            lines.append(f"{icon} {s.get('title','')[:45]} | {'+' if up else ''}{move}¢")
+        lines.append("")
+
+    # Next economic event
+    events = fetch_fred_events()
+    if events:
+        nxt = events[0]
+        lines.append(f"📅 Next release: <b>{nxt['label']}</b> on {nxt['date']} at {nxt['time']}")
+
+    lines.append("\nGood luck today \U0001f91d")
+    tg_send("\n".join(lines))
+
+
 def update_open_trade_prices():
     """Update current_price for all open trades."""
     with Session(engine) as s:
@@ -164,20 +221,9 @@ def check_signal_outcomes():
 
             if cur_price is None: time.sleep(0.2); continue
 
-            if   cur_price >= 0.98: resolved_yes = True
-            elif cur_price <= 0.02: resolved_yes = False
+            if   cur_price >= 0.95: resolved_yes = True
+            elif cur_price <= 0.05: resolved_yes = False
             else: time.sleep(0.2); continue
-
-            # Only mark resolved if close date has passed
-            with Session(engine) as s2:
-                row2 = s2.get(Signal, sig_id)
-                close_time = row2.market_close_time if row2 else ""
-            if close_time:
-                try:
-                    from datetime import datetime
-                    if datetime.strptime(close_time[:10],"%Y-%m-%d") > datetime.utcnow():
-                        time.sleep(0.2); continue
-                except: pass
 
             bullish = sig_type in ("UP","BUY","OPEN_POSITION","LIVE_BUY")
             outcome = "WON" if (bullish == resolved_yes) else "LOST"
