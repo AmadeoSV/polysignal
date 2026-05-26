@@ -285,3 +285,135 @@ def _trade_dict(r: Trade) -> dict:
         "entry_time": r.entry_time.strftime("%Y-%m-%d %H:%M") if r.entry_time else "",
         "exit_time":  r.exit_time.strftime("%Y-%m-%d %H:%M") if r.exit_time else "",
     }
+
+# ── Price-after tracking ───────────────────────────────────────────────────────
+
+class SignalPriceHistory(Base):
+    __tablename__ = "signal_price_history"
+    id            = Column(Integer, primary_key=True)
+    signal_id     = Column(Integer, ForeignKey("signals.id"), index=True)
+    platform      = Column(String)
+    ticker        = Column(String)
+    signal_time   = Column(DateTime)
+    price_at_signal = Column(Float)
+    price_15m     = Column(Float, nullable=True)
+    price_1h      = Column(Float, nullable=True)
+    price_4h      = Column(Float, nullable=True)
+    price_24h     = Column(Float, nullable=True)
+    price_7d      = Column(Float, nullable=True)
+    move_15m      = Column(Float, nullable=True)
+    move_1h       = Column(Float, nullable=True)
+    move_24h      = Column(Float, nullable=True)
+    continued_15m = Column(Boolean, nullable=True)  # did price move same direction?
+    continued_1h  = Column(Boolean, nullable=True)
+    continued_24h = Column(Boolean, nullable=True)
+    created_at    = Column(DateTime, default=datetime.utcnow)
+
+class TraderPriceHistory(Base):
+    __tablename__ = "trader_price_history"
+    id              = Column(Integer, primary_key=True)
+    platform        = Column(String, default="polymarket")
+    condition_id    = Column(String, index=True)
+    outcome         = Column(String)
+    market_title    = Column(Text)
+    trader_rank     = Column(Integer)
+    trader_username = Column(String)
+    entry_price     = Column(Float)
+    entry_time      = Column(DateTime, default=datetime.utcnow)
+    price_15m       = Column(Float, nullable=True)
+    price_1h        = Column(Float, nullable=True)
+    price_4h        = Column(Float, nullable=True)
+    price_24h       = Column(Float, nullable=True)
+    price_7d        = Column(Float, nullable=True)
+    move_15m        = Column(Float, nullable=True)
+    move_1h         = Column(Float, nullable=True)
+    move_24h        = Column(Float, nullable=True)
+    continued_15m   = Column(Boolean, nullable=True)
+    continued_1h    = Column(Boolean, nullable=True)
+    continued_24h   = Column(Boolean, nullable=True)
+
+Base.metadata.create_all(engine)
+
+
+def db_init_signal_price_history(signal_id: int, ticker: str, platform: str,
+                                  signal_time: datetime, price: float):
+    """Create a price history row when a signal is first detected."""
+    with Session(engine) as s:
+        existing = s.query(SignalPriceHistory).filter_by(signal_id=signal_id).first()
+        if existing: return
+        s.add(SignalPriceHistory(
+            signal_id=signal_id, platform=platform, ticker=ticker,
+            signal_time=signal_time, price_at_signal=price,
+        ))
+        s.commit()
+
+
+def db_init_trader_entry(condition_id: str, outcome: str, title: str,
+                          rank: int, username: str, entry_price: float):
+    """Record a trader entry for price-after tracking. One row per trader per market."""
+    with Session(engine) as s:
+        existing = s.query(TraderPriceHistory).filter_by(
+            condition_id=condition_id, outcome=outcome,
+            trader_username=username
+        ).first()
+        if existing: return
+        s.add(TraderPriceHistory(
+            platform="polymarket", condition_id=condition_id,
+            outcome=outcome, market_title=title,
+            trader_rank=rank, trader_username=username,
+            entry_price=entry_price,
+        ))
+        s.commit()
+
+
+def db_get_pending_price_history() -> List[dict]:
+    """Return signal price history rows that still have unfilled time buckets."""
+    now = datetime.utcnow()
+    with Session(engine) as s:
+        rows = s.query(SignalPriceHistory).filter(
+            SignalPriceHistory.signal_time >= now - timedelta(days=8),
+            (SignalPriceHistory.price_7d == None) |
+            (SignalPriceHistory.price_24h == None) |
+            (SignalPriceHistory.price_1h == None) |
+            (SignalPriceHistory.price_15m == None)
+        ).all()
+        return [{"id":r.id,"signal_id":r.signal_id,"ticker":r.ticker,
+                 "platform":r.platform,"signal_time":r.signal_time,
+                 "price_at_signal":r.price_at_signal,
+                 "price_15m":r.price_15m,"price_1h":r.price_1h,
+                 "price_4h":r.price_4h,"price_24h":r.price_24h,
+                 "price_7d":r.price_7d} for r in rows]
+
+
+def db_get_pending_trader_history() -> List[dict]:
+    """Return trader entries with unfilled price buckets."""
+    now = datetime.utcnow()
+    with Session(engine) as s:
+        rows = s.query(TraderPriceHistory).filter(
+            TraderPriceHistory.entry_time >= now - timedelta(days=8),
+            (TraderPriceHistory.price_7d == None) |
+            (TraderPriceHistory.price_24h == None) |
+            (TraderPriceHistory.price_1h == None) |
+            (TraderPriceHistory.price_15m == None)
+        ).all()
+        return [{"id":r.id,"condition_id":r.condition_id,"outcome":r.outcome,
+                 "entry_price":r.entry_price,"entry_time":r.entry_time,
+                 "price_15m":r.price_15m,"price_1h":r.price_1h,
+                 "price_4h":r.price_4h,"price_24h":r.price_24h,
+                 "price_7d":r.price_7d} for r in rows]
+
+
+def db_update_price_bucket(table: str, row_id: int, bucket: str,
+                            price: float, price_at_signal: float, direction: int):
+    """Fill in a time bucket and calculate continuation flag."""
+    move  = price - price_at_signal
+    cont  = (move > 0) == (direction > 0) if direction != 0 else None
+    model = SignalPriceHistory if table == "signal" else TraderPriceHistory
+    with Session(engine) as s:
+        row = s.get(model, row_id)
+        if not row: return
+        setattr(row, f"price_{bucket}", price)
+        setattr(row, f"move_{bucket}", round(move, 4)) if hasattr(row, f"move_{bucket}") else None
+        if bucket in ("15m","1h","24h"):
+            setattr(row, f"continued_{bucket}", cont)
+        s.commit()

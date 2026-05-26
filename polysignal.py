@@ -23,7 +23,7 @@ import kalshi as kal
 import polymarket as poly
 from signals import (check_new_signals, check_cluster_alert, fetch_fred_events,
                      update_open_trade_prices, check_signal_outcomes, send_morning_brief,
-                     seed_seen_signals)
+                     seed_seen_signals, update_price_history)
 
 # Seed seen signals from DB on startup
 seed_seen_signals()
@@ -113,6 +113,14 @@ def run_kalshi_scan():
             if sig:
                 new_sigs.append(sig)
                 sig["db_id"] = db_save_signal(sig, "kalshi")
+                # Start price-after tracking for this signal
+                if sig["db_id"]:
+                    from database import db_init_signal_price_history
+                    from datetime import datetime as _dt
+                    db_init_signal_price_history(
+                        sig["db_id"], ticker, "kalshi",
+                        _dt.utcnow(), sig["cur_price"]
+                    )
 
                 # Check accumulator for cluster
                 cluster = kal.check_accumulator(ticker, mkt, sig, cur or 0, depth)
@@ -200,7 +208,7 @@ def run_poly_live():
 
 
 def scheduler():
-    nk = npp = npl = time.time()
+    nk = npp = npl = nph = time.time()
     while True:
         now = time.time()
         if now >= nk:
@@ -212,6 +220,9 @@ def scheduler():
         if now >= npl:
             threading.Thread(target=run_poly_live,      daemon=True).start()
             npl = now + POLY_LIVE_INTERVAL
+        if now >= nph:
+            threading.Thread(target=update_price_history, daemon=True).start()
+            nph = now + 3600  # every hour
         time.sleep(5)
 
 
@@ -1093,6 +1104,16 @@ async function saveConfig(){
 fetchAnalytics();
 poll();
 </script></body></html>"""
+
+if __name__=="__main__":
+    if TG_TOKEN: print(f"✅ Telegram configured. Chat: {TG_CHAT}",file=sys.stderr)
+    else:        print("ℹ️  No Telegram token.",file=sys.stderr)
+    if FRED_KEY: print("✅ FRED API configured.",file=sys.stderr)
+    else:        print("ℹ️  No FRED key — static calendar dates.",file=sys.stderr)
+    print(f"Starting PolySignal Unified → http://localhost:{PORT}",file=sys.stderr)
+    threading.Thread(target=scheduler,daemon=True).start()
+    threading.Thread(target=tg_poll,daemon=True).start()
+    app.run(host="0.0.0.0",port=PORT,debug=False)
 
 if __name__ == "__main__":
     db_url = os.environ.get("DATABASE_URL","")

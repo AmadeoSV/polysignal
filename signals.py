@@ -38,19 +38,6 @@ _seen_signals: Set[str] = set()
 _seen_lock = threading.Lock()
 
 
-def seed_seen_signals():
-    """Load already-alerted signal keys from DB on startup to prevent duplicate alerts."""
-    from database import Session, Signal, engine
-    with Session(engine) as s:
-        keys = s.query(Signal.platform_signal_id).filter(
-            Signal.platform_signal_id != None
-        ).all()
-        with _seen_lock:
-            for (k,) in keys:
-                if k: _seen_signals.add(k)
-    print(f"Seeded {len(_seen_signals)} seen signals from DB.")
-
-
 def get_seen_signals() -> Set[str]:
     return _seen_signals
 
@@ -127,10 +114,7 @@ def send_morning_brief(state_ref: dict):
 
     now_et = datetime.now(timezone.utc)
     # 8am ET = 12pm or 13pm UTC depending on DST — check hour
-    # 8am ET = 12:00 UTC (EDT, summer) or 13:00 UTC (EST, winter)
     if now_et.hour not in (12, 13): return
-    # Only send once per day — check minute window
-    if now_et.minute > 10: return
 
     a      = db_analytics()
     sigs   = db_get_signals(limit=200)
@@ -237,20 +221,9 @@ def check_signal_outcomes():
 
             if cur_price is None: time.sleep(0.2); continue
 
-            if   cur_price >= 0.98: resolved_yes = True
-            elif cur_price <= 0.02: resolved_yes = False
+            if   cur_price >= 0.95: resolved_yes = True
+            elif cur_price <= 0.05: resolved_yes = False
             else: time.sleep(0.2); continue
-
-            # Only mark resolved if close date has passed
-            with Session(engine) as s2:
-                row2 = s2.get(Signal, sig_id)
-                close_time = row2.market_close_time if row2 else ""
-            if close_time:
-                try:
-                    close_dt = datetime.strptime(close_time[:10],"%Y-%m-%d")
-                    if close_dt > datetime.utcnow():
-                        time.sleep(0.2); continue
-                except: pass
 
             bullish = sig_type in ("UP","BUY","OPEN_POSITION","LIVE_BUY")
             outcome = "WON" if (bullish == resolved_yes) else "LOST"
@@ -273,3 +246,73 @@ def check_signal_outcomes():
 
     if resolved:
         print(f"Outcome check done: {resolved} resolved.")
+
+
+def update_price_history():
+    """
+    Hourly job — fills in price_15m, price_1h, price_4h, price_24h, price_7d
+    for both signal and trader price history tables.
+    """
+    from database import (db_get_pending_price_history, db_get_pending_trader_history,
+                          db_update_price_bucket)
+    from kalshi import fetch_orderbook, best_yes_price
+    now = datetime.utcnow()
+
+    # ── Signal price history ───────────────────────────────────────────────────
+    pending_sigs = db_get_pending_price_history()
+    for row in pending_sigs:
+        sig_time = row["signal_time"]
+        elapsed  = (now - sig_time).total_seconds()
+        base     = row["price_at_signal"]
+        direction= 1  # signals are directional — assume UP for now, improve later
+
+        try:
+            if row["platform"] == "kalshi":
+                ob = fetch_orderbook(row["ticker"])
+                cur = best_yes_price(ob) if ob else None
+            else:
+                data = requests.get(f"{POLY_API}/markets",
+                    params={"clob_token_ids": row["ticker"]}, timeout=8).json()
+                cur = float(data[0]["outcomePrices"][0])/100 if data and data[0].get("outcomePrices") else None
+
+            if cur is None: continue
+
+            buckets = [
+                ("15m",  15*60),
+                ("1h",   3600),
+                ("4h",   4*3600),
+                ("24h",  24*3600),
+                ("7d",   7*24*3600),
+            ]
+            for bucket, seconds in buckets:
+                if elapsed >= seconds and row.get(f"price_{bucket}") is None:
+                    db_update_price_bucket("signal", row["id"], bucket, cur, base, direction)
+
+        except Exception as e:
+            print(f"Price history update error (signal {row['id']}): {e}")
+        time.sleep(0.2)
+
+    # ── Trader price history ───────────────────────────────────────────────────
+    pending_traders = db_get_pending_trader_history()
+    for row in pending_traders:
+        entry_time = row["entry_time"]
+        elapsed    = (now - entry_time).total_seconds()
+        base       = row["entry_price"]
+
+        try:
+            data = requests.get(f"{POLY_API}/markets",
+                params={"clob_token_ids": row["condition_id"]}, timeout=8).json()
+            cur = float(data[0]["outcomePrices"][0])/100 if data and data[0].get("outcomePrices") else None
+            if cur is None: continue
+
+            buckets = [("15m",15*60),("1h",3600),("4h",4*3600),("24h",24*3600),("7d",7*24*3600)]
+            for bucket, seconds in buckets:
+                if elapsed >= seconds and row.get(f"price_{bucket}") is None:
+                    db_update_price_bucket("trader", row["id"], bucket, cur, base, 1)
+
+        except Exception as e:
+            print(f"Price history update error (trader {row['id']}): {e}")
+        time.sleep(0.2)
+
+    if pending_sigs or pending_traders:
+        print(f"Price history: updated {len(pending_sigs)} signals, {len(pending_traders)} trader entries.")
