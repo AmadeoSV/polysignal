@@ -22,7 +22,11 @@ from database import (engine, db_save_signal, db_get_signals, db_get_trades,
 import kalshi as kal
 import polymarket as poly
 from signals import (check_new_signals, check_cluster_alert, fetch_fred_events,
-                     update_open_trade_prices, check_signal_outcomes, send_morning_brief)
+                     update_open_trade_prices, check_signal_outcomes, send_morning_brief,
+                     seed_seen_signals)
+
+# Seed seen signals from DB on startup
+seed_seen_signals()
 from telegram_bot import tg_send, tg_get_updates, poll_loop
 
 # ── Config ─────────────────────────────────────────────────────────────────────
