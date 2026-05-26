@@ -38,6 +38,19 @@ _seen_signals: Set[str] = set()
 _seen_lock = threading.Lock()
 
 
+def seed_seen_signals():
+    """Load already-alerted signal keys from DB on startup to prevent duplicate alerts."""
+    from database import Session, Signal, engine as _engine
+    with Session(_engine) as s:
+        keys = s.query(Signal.platform_signal_id).filter(
+            Signal.platform_signal_id != None
+        ).all()
+        with _seen_lock:
+            for (k,) in keys:
+                if k: _seen_signals.add(k)
+    print(f"Seeded {len(_seen_signals)} seen signals from DB.")
+
+
 def get_seen_signals() -> Set[str]:
     return _seen_signals
 
