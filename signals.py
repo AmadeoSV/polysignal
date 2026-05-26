@@ -57,30 +57,45 @@ def get_seen_signals() -> Set[str]:
 def check_new_signals(rows: List[dict], platform: str):
     """Send Telegram alerts for signals we haven't seen before.
     Uses DB alert_sent_at as source of truth — not in-memory set.
-    This ensures alerts fire correctly after restarts and between scans.
     """
-    from database import db_mark_alert_sent, db_get_alerted_keys
-    # Always check DB for what's been alerted — don't rely on in-memory set
-    already_alerted = db_get_alerted_keys()
+    if not rows:
+        return
+    try:
+        from database import db_mark_alert_sent, db_get_alerted_keys
+        already_alerted = db_get_alerted_keys()
+    except Exception as e:
+        print(f"check_new_signals: failed to load alerted keys: {e}")
+        already_alerted = set()
+
+    print(f"check_new_signals: {len(rows)} rows, {len(already_alerted)} already alerted")
 
     for r in rows:
         key = r.get("sig_key","")
-        if not key or key in already_alerted: continue
+        if not key:
+            print(f"  skipping row with no sig_key")
+            continue
+        if key in already_alerted:
+            print(f"  already alerted: {key[:60]}")
+            continue
+
         url = r.get("url") or r.get("market_url","")
+        print(f"  ALERTING: {key[:60]}")
 
-        if platform == "kalshi":
-            msg     = format_kalshi_alert(r)
-            buttons = [{"text":"View on Kalshi","url":url}] if url else []
-        else:
-            msg     = format_poly_alert(r)
-            buttons = [{"text":"View on Polymarket","url":url}] if url else []
+        try:
+            if platform == "kalshi":
+                msg     = format_kalshi_alert(r)
+                buttons = [{"text":"View on Kalshi","url":url}] if url else []
+            else:
+                msg     = format_poly_alert(r)
+                buttons = [{"text":"View on Polymarket","url":url}] if url else []
 
-        tg_send(msg, buttons=buttons or None)
-        # Mark as alerted in DB immediately
-        db_mark_alert_sent(key)
-        # Also update in-memory set
-        with _seen_lock:
-            _seen_signals.add(key)
+            tg_send(msg, buttons=buttons or None)
+            db_mark_alert_sent(key)
+            with _seen_lock:
+                _seen_signals.add(key)
+            print(f"  Alert sent and marked OK")
+        except Exception as e:
+            print(f"  Alert failed for {key[:50]}: {e}")
 
 
 def check_cluster_alert(cluster: dict):
