@@ -219,6 +219,7 @@ def run_poly_live():
     try:
         traders = poly.fetch_leaderboard(cfg["poly_top"])
         rows    = poly.scan_live(traders, cfg)
+        print(f"Poly live scan: {len(traders)} traders, {len(rows)} signals found")
         for r in rows:
             r["sig_key"] = f"P:{r['conditionId']}:{r['outcome']}:LIVE_BUY"
             db_save_signal(r, "polymarket")
@@ -228,6 +229,7 @@ def run_poly_live():
             _st["last_poly_live"]     = utcnow_s()
             _st["scanning_poly_live"] = False
     except Exception as e:
+        print(f"Poly live scan error: {e}")
         with _lock: _st["scanning_poly_live"] = False
 
 
@@ -1159,15 +1161,6 @@ fetchAnalytics();
 poll();
 </script></body></html>"""
 
-if __name__=="__main__":
-    if TG_TOKEN: print(f"✅ Telegram configured. Chat: {TG_CHAT}",file=sys.stderr)
-    else:        print("ℹ️  No Telegram token.",file=sys.stderr)
-    if FRED_KEY: print("✅ FRED API configured.",file=sys.stderr)
-    else:        print("ℹ️  No FRED key — static calendar dates.",file=sys.stderr)
-    print(f"Starting PolySignal Unified → http://localhost:{PORT}",file=sys.stderr)
-    threading.Thread(target=scheduler,daemon=True).start()
-    threading.Thread(target=tg_poll,daemon=True).start()
-    app.run(host="0.0.0.0",port=PORT,debug=False)
 
 if __name__ == "__main__":
     db_url = os.environ.get("DATABASE_URL","")
