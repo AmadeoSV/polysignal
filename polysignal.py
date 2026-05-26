@@ -231,8 +231,20 @@ def run_poly_live():
         with _lock: _st["scanning_poly_live"] = False
 
 
+def self_ping():
+    """Ping our own health endpoint every 4 minutes to prevent Railway from sleeping."""
+    url = os.environ.get("RAILWAY_PUBLIC_DOMAIN","")
+    if not url: return
+    if not url.startswith("http"): url = f"https://{url}"
+    try:
+        requests.get(f"{url}/api/health", timeout=10,
+                     auth=(os.environ.get("AUTH_USERNAME","amadeo"),
+                           os.environ.get("AUTH_PASSWORD","")))
+    except: pass
+
+
 def scheduler():
-    nk = npp = npl = nph = time.time()
+    nk = npp = npl = nph = nping = time.time()
     while True:
         now = time.time()
         if now >= nk:
@@ -246,7 +258,10 @@ def scheduler():
             npl = now + POLY_LIVE_INTERVAL
         if now >= nph:
             threading.Thread(target=update_price_history, daemon=True).start()
-            nph = now + 3600  # every hour
+            nph = now + 3600
+        if now >= nping:
+            threading.Thread(target=self_ping, daemon=True).start()
+            nping = now + 240  # every 4 minutes
         time.sleep(5)
 
 
@@ -358,6 +373,12 @@ def api_scan_now():
     threading.Thread(target=run_kalshi_scan,    daemon=True).start()
     threading.Thread(target=run_poly_positions, daemon=True).start()
     return jsonify({"status":"started"})
+
+@app.route("/api/health")
+@requires_auth
+def api_health():
+    return jsonify({"status":"ok","scan_count":_st["scan_count"]})
+
 
 @app.route("/api/config", methods=["POST"])
 @requires_auth
@@ -1138,6 +1159,15 @@ fetchAnalytics();
 poll();
 </script></body></html>"""
 
+if __name__=="__main__":
+    if TG_TOKEN: print(f"✅ Telegram configured. Chat: {TG_CHAT}",file=sys.stderr)
+    else:        print("ℹ️  No Telegram token.",file=sys.stderr)
+    if FRED_KEY: print("✅ FRED API configured.",file=sys.stderr)
+    else:        print("ℹ️  No FRED key — static calendar dates.",file=sys.stderr)
+    print(f"Starting PolySignal Unified → http://localhost:{PORT}",file=sys.stderr)
+    threading.Thread(target=scheduler,daemon=True).start()
+    threading.Thread(target=tg_poll,daemon=True).start()
+    app.run(host="0.0.0.0",port=PORT,debug=False)
 
 if __name__ == "__main__":
     db_url = os.environ.get("DATABASE_URL","")
