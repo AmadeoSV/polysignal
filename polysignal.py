@@ -29,6 +29,7 @@ from signals import (check_new_signals, check_cluster_alert, fetch_fred_events,
 
 # Seed seen signals from DB on startup
 seed_seen_signals()
+print("Startup complete — scheduler and self-ping running.")
 from telegram_bot import tg_send, tg_get_updates, poll_loop
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -235,18 +236,27 @@ def run_poly_live():
 
 def self_ping():
     """Ping our own health endpoint every 4 minutes to prevent Railway from sleeping."""
-    url = os.environ.get("RAILWAY_PUBLIC_DOMAIN","")
-    if not url: return
-    if not url.startswith("http"): url = f"https://{url}"
+    # Try env var first, fall back to known URL
+    domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN","")
+    if not domain or "railway.internal" in domain:
+        domain = "polysignal-production-0227.up.railway.app"
+    url = f"https://{domain}" if not domain.startswith("http") else domain
     try:
         requests.get(f"{url}/api/health", timeout=10,
                      auth=(os.environ.get("AUTH_USERNAME","amadeo"),
                            os.environ.get("AUTH_PASSWORD","")))
-    except: pass
+        print(f"Self-ping OK: {url}")
+    except Exception as e:
+        print(f"Self-ping failed: {e}")
 
 
 def scheduler():
-    nk = npp = npl = nph = nping = time.time()
+    now    = time.time()
+    nk     = now
+    npp    = now + 30          # positions starts 30s after kalshi
+    npl    = now + 60          # live buys starts 60s after kalshi
+    nph    = now + 3600
+    nping  = now + 60          # first ping after 60s
     while True:
         now = time.time()
         if now >= nk:
@@ -263,7 +273,7 @@ def scheduler():
             nph = now + 3600
         if now >= nping:
             threading.Thread(target=self_ping, daemon=True).start()
-            nping = now + 240  # every 4 minutes
+            nping = now + 240
         time.sleep(5)
 
 
