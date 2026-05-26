@@ -19,7 +19,8 @@ from functools import wraps
 # Local modules
 from database import (engine, db_save_signal, db_get_signals, db_get_trades,
                       db_add_trade, db_close_trade, db_analytics, db_cleanup,
-                      db_size_mb, Session, Trade)
+                      db_size_mb, db_mark_alert_sent, db_get_alerted_keys,
+                      Session, Trade)
 import kalshi as kal
 import polymarket as poly
 from signals import (check_new_signals, check_cluster_alert, fetch_fred_events,
@@ -1137,15 +1138,6 @@ fetchAnalytics();
 poll();
 </script></body></html>"""
 
-if __name__=="__main__":
-    if TG_TOKEN: print(f"✅ Telegram configured. Chat: {TG_CHAT}",file=sys.stderr)
-    else:        print("ℹ️  No Telegram token.",file=sys.stderr)
-    if FRED_KEY: print("✅ FRED API configured.",file=sys.stderr)
-    else:        print("ℹ️  No FRED key — static calendar dates.",file=sys.stderr)
-    print(f"Starting PolySignal Unified → http://localhost:{PORT}",file=sys.stderr)
-    threading.Thread(target=scheduler,daemon=True).start()
-    threading.Thread(target=tg_poll,daemon=True).start()
-    app.run(host="0.0.0.0",port=PORT,debug=False)
 
 if __name__ == "__main__":
     db_url = os.environ.get("DATABASE_URL","")

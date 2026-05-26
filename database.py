@@ -56,6 +56,7 @@ class Signal(Base):
     market_close_time  = Column(String)
     platform_signal_id = Column(String, unique=True)
     detected_at        = Column(DateTime, default=datetime.utcnow)
+    alert_sent_at      = Column(DateTime, nullable=True)
     trades             = relationship("Trade", back_populates="signal")
 
 class Trade(Base):
@@ -243,6 +244,23 @@ def db_analytics() -> dict:
             "signals_by_day": [{"date":k,"count":v}
                                for k,v in sorted(sig_by_day.items())],
         }
+
+def db_mark_alert_sent(sig_key: str):
+    """Mark a signal as alerted so we know not to re-alert after restart."""
+    from datetime import datetime
+    with Session(engine) as s:
+        row = s.query(Signal).filter_by(platform_signal_id=sig_key).first()
+        if row and not row.alert_sent_at:
+            row.alert_sent_at = datetime.utcnow()
+            s.commit()
+
+def db_get_alerted_keys() -> set:
+    """Return sig_keys of signals that have already been alerted."""
+    with Session(engine) as s:
+        rows = s.query(Signal.platform_signal_id).filter(
+            Signal.alert_sent_at != None
+        ).all()
+        return {r[0] for r in rows if r[0]}
 
 def db_cleanup(days_to_keep=7):
     cutoff = datetime.utcnow() - timedelta(days=days_to_keep)

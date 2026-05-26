@@ -39,16 +39,15 @@ _seen_lock = threading.Lock()
 
 
 def seed_seen_signals():
-    """Load already-alerted signal keys from DB on startup to prevent duplicate alerts."""
-    from database import Session, Signal, engine as _engine
-    with Session(_engine) as s:
-        keys = s.query(Signal.platform_signal_id).filter(
-            Signal.platform_signal_id != None
-        ).all()
-        with _seen_lock:
-            for (k,) in keys:
-                if k: _seen_signals.add(k)
-    print(f"Seeded {len(_seen_signals)} seen signals from DB.")
+    """Load only ALERTED signal keys from DB on startup.
+    This prevents re-alerting signals that were sent before a restart,
+    while still allowing new signals to fire normally.
+    """
+    from database import db_get_alerted_keys
+    keys = db_get_alerted_keys()
+    with _seen_lock:
+        _seen_signals.update(keys)
+    print(f"Seeded {len(keys)} alerted signal keys from DB.")
 
 
 def get_seen_signals() -> Set[str]:
@@ -57,6 +56,7 @@ def get_seen_signals() -> Set[str]:
 
 def check_new_signals(rows: List[dict], platform: str):
     """Send Telegram alerts for signals we haven't seen before."""
+    from database import db_mark_alert_sent
     with _seen_lock:
         for r in rows:
             key = r.get("sig_key","")
@@ -72,6 +72,8 @@ def check_new_signals(rows: List[dict], platform: str):
                 buttons = [{"text":"View on Polymarket","url":url}] if url else []
 
             tg_send(msg, buttons=buttons or None)
+            # Mark as alerted in DB so restart-safe dedup works
+            db_mark_alert_sent(key)
 
 
 def check_cluster_alert(cluster: dict):
