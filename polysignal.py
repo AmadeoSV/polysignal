@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from flask import Flask, jsonify, render_template_string, request as freq
+from functools import wraps
 
 # Local modules
 from database import (engine, db_save_signal, db_get_signals, db_get_trades,
@@ -69,6 +70,28 @@ _st: Dict[str,Any] = {
 }
 
 app = Flask(__name__)
+
+# ── Basic Auth ────────────────────────────────────────────────────────────────
+_AUTH_USER = os.environ.get("AUTH_USERNAME", "amadeo")
+_AUTH_PASS = os.environ.get("AUTH_PASSWORD", "")
+
+def check_auth(username, password):
+    return username == _AUTH_USER and password == _AUTH_PASS and _AUTH_PASS != ""
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not _AUTH_PASS:  # no password set — skip auth (local dev)
+            return f(*args, **kwargs)
+        auth = freq.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return (
+                "Unauthorized",
+                401,
+                {"WWW-Authenticate": 'Basic realm="PolySignal"'}
+            )
+        return f(*args, **kwargs)
+    return decorated
 
 # ── Scan runners ───────────────────────────────────────────────────────────────
 
@@ -282,10 +305,12 @@ def handle_cmd(text: str, chat_id: str):
 # ── Flask routes ───────────────────────────────────────────────────────────────
 
 @app.route("/")
+@requires_auth
 def index():
     return render_template_string(HTML)
 
 @app.route("/api/state")
+@requires_auth
 def api_state():
     with _lock:
         base = {k: _st[k] for k in [
@@ -301,33 +326,40 @@ def api_state():
     return jsonify(base)
 
 @app.route("/api/signals")
+@requires_auth
 def api_signals():
     return jsonify(db_get_signals(100, freq.args.get("platform")))
 
 @app.route("/api/trades")
+@requires_auth
 def api_trades():
     return jsonify(db_get_trades(freq.args.get("status"), freq.args.get("platform")))
 
 @app.route("/api/trades", methods=["POST"])
+@requires_auth
 def api_add_trade():
     return jsonify(db_add_trade(freq.get_json(force=True) or {}))
 
 @app.route("/api/trades/<int:tid>/close", methods=["POST"])
+@requires_auth
 def api_close_trade(tid):
     data = freq.get_json(force=True) or {}
     return jsonify(db_close_trade(tid, float(data.get("exit_price",0)), data.get("notes","")))
 
 @app.route("/api/analytics")
+@requires_auth
 def api_analytics():
     return jsonify(db_analytics())
 
 @app.route("/api/scan_now", methods=["POST"])
+@requires_auth
 def api_scan_now():
     threading.Thread(target=run_kalshi_scan,    daemon=True).start()
     threading.Thread(target=run_poly_positions, daemon=True).start()
     return jsonify({"status":"started"})
 
 @app.route("/api/config", methods=["POST"])
+@requires_auth
 def api_config():
     data = freq.get_json(force=True) or {}
     with _lock:
