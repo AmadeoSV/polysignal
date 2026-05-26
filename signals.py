@@ -114,7 +114,10 @@ def send_morning_brief(state_ref: dict):
 
     now_et = datetime.now(timezone.utc)
     # 8am ET = 12pm or 13pm UTC depending on DST — check hour
+    # 8am ET = 12:00 UTC (EDT, summer) or 13:00 UTC (EST, winter)
     if now_et.hour not in (12, 13): return
+    # Only send once per day — check minute window
+    if now_et.minute > 10: return
 
     a      = db_analytics()
     sigs   = db_get_signals(limit=200)
@@ -221,9 +224,20 @@ def check_signal_outcomes():
 
             if cur_price is None: time.sleep(0.2); continue
 
-            if   cur_price >= 0.95: resolved_yes = True
-            elif cur_price <= 0.05: resolved_yes = False
+            if   cur_price >= 0.98: resolved_yes = True
+            elif cur_price <= 0.02: resolved_yes = False
             else: time.sleep(0.2); continue
+
+            # Only mark resolved if close date has passed
+            with Session(engine) as s2:
+                row2 = s2.get(Signal, sig_id)
+                close_time = row2.market_close_time if row2 else ""
+            if close_time:
+                try:
+                    close_dt = datetime.strptime(close_time[:10],"%Y-%m-%d")
+                    if close_dt > datetime.utcnow():
+                        time.sleep(0.2); continue
+                except: pass
 
             bullish = sig_type in ("UP","BUY","OPEN_POSITION","LIVE_BUY")
             outcome = "WON" if (bullish == resolved_yes) else "LOST"
