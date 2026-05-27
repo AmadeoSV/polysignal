@@ -67,19 +67,14 @@ def check_new_signals(rows: List[dict], platform: str):
         print(f"check_new_signals: failed to load alerted keys: {e}")
         already_alerted = set()
 
-    print(f"check_new_signals: {len(rows)} rows, {len(already_alerted)} already alerted")
-
     for r in rows:
         key = r.get("sig_key","")
         if not key:
-            print(f"  skipping row with no sig_key")
             continue
         if key in already_alerted:
-            print(f"  already alerted: {key[:60]}")
             continue
 
         url = r.get("url") or r.get("market_url","")
-        print(f"  ALERTING: {key[:60]}")
 
         try:
             if platform == "kalshi":
@@ -93,7 +88,6 @@ def check_new_signals(rows: List[dict], platform: str):
             db_mark_alert_sent(key)
             with _seen_lock:
                 _seen_signals.add(key)
-            print(f"  Alert sent and marked OK")
         except Exception as e:
             print(f"  Alert failed for {key[:50]}: {e}")
 
@@ -145,60 +139,86 @@ def fetch_fred_events() -> List[dict]:
 
 
 def send_morning_brief(state_ref: dict):
-    """Send a daily morning summary at 8am ET."""
+    """Send a daily morning summary at 8am ET (12-13 UTC during EDT)."""
     from database import db_analytics, db_get_signals
-    from datetime import datetime, timezone
 
-    now_et = datetime.now(timezone.utc)
-    # 8am ET = 12pm or 13pm UTC depending on DST — check hour
-    if now_et.hour not in (12, 13): return
+    now_utc = datetime.now(timezone.utc)
 
-    a      = db_analytics()
-    sigs   = db_get_signals(limit=200)
-    active = [s for s in sigs if s.get("outcome") is None]
+    # 8am ET = 12 UTC (EDT) or 13 UTC (EST) — check hour
+    if now_utc.hour not in (12, 13):
+        return
 
-    # Group by platform
-    k_sigs = [s for s in active if s["platform"]=="kalshi"]
-    p_sigs = [s for s in active if s["platform"]=="polymarket"]
+    # Only fire in the first 10 minutes of the hour
+    if now_utc.minute > 10:
+        return
 
-    # Top poly positions from live state
-    top_poly = state_ref.get("poly_positions",[])[:5]
-    top_k    = state_ref.get("kalshi_signals",[])[:3]
+    # Guard: only send once per day using a /tmp flag file
+    today = now_utc.strftime("%Y-%m-%d")
+    flag_file = f"/tmp/morning_brief_{today}.sent"
+    if os.path.exists(flag_file):
+        return
+    # Mark as sent immediately to prevent race condition
+    try:
+        open(flag_file, "w").close()
+    except Exception as e:
+        print(f"Morning brief flag write failed: {e}")
 
-    lines = [
-        "☀️ <b>PolySignal Morning Brief</b>",
-        "━"*20,
-        f"Signals overnight: <b>{len(active)}</b> active ({len(k_sigs)} Kalshi, {len(p_sigs)} Polymarket)",
-        f"Open trades: <b>{a['open_trades']}</b> | PnL: <b>${a['total_pnl']:+.2f}</b>",
-        "",
-    ]
+    try:
+        a      = db_analytics()
+        sigs   = db_get_signals(limit=200)
+        active = [s for s in sigs if s.get("outcome") is None]
 
-    if top_poly:
-        lines.append("<b>📊 Top Polymarket positions right now:</b>")
-        for r in top_poly[:4]:
-            dom  = round((r.get("dominance",0))*100)
-            mom  = round((r.get("momentum",0))*100,1)
-            icon = "🟢" if dom>=80 else "🟡"
-            lines.append(f"{icon} {r.get('title','')[:45]} | {r.get('traders',0)} traders, {dom}% | +{mom}¢")
-        lines.append("")
+        # Group by platform
+        k_sigs = [s for s in active if s["platform"]=="kalshi"]
+        p_sigs = [s for s in active if s["platform"]=="polymarket"]
 
-    if top_k:
-        lines.append("<b>⚡ Recent Kalshi signals:</b>")
-        for s in top_k:
-            up   = s.get("direction")=="UP"
-            icon = "🟢" if up else "🔴"
-            move = round(s.get("move_abs",0)*100,1)
-            lines.append(f"{icon} {s.get('title','')[:45]} | {'+' if up else ''}{move}¢")
-        lines.append("")
+        # Top poly positions and kalshi signals from live state
+        top_poly = state_ref.get("poly_positions",[])[:5]
+        top_k    = state_ref.get("kalshi_signals",[])[:3]
 
-    # Next economic event
-    events = fetch_fred_events()
-    if events:
-        nxt = events[0]
-        lines.append(f"📅 Next release: <b>{nxt['label']}</b> on {nxt['date']} at {nxt['time']}")
+        lines = [
+            "☀️ <b>PolySignal Morning Brief</b>",
+            "━"*20,
+            f"Signals active: <b>{len(active)}</b> ({len(k_sigs)} Kalshi, {len(p_sigs)} Polymarket)",
+            f"Open trades: <b>{a['open_trades']}</b> | PnL: <b>${a['total_pnl']:+.2f}</b>",
+            "",
+        ]
 
-    lines.append("\nGood luck today \U0001f91d")
-    tg_send("\n".join(lines))
+        if top_poly:
+            lines.append("<b>📊 Top Polymarket positions right now:</b>")
+            for r in top_poly[:4]:
+                dom  = round((r.get("dominance",0))*100)
+                mom  = round((r.get("momentum",0))*100,1)
+                icon = "🟢" if dom>=80 else "🟡"
+                lines.append(f"{icon} {r.get('title','')[:45]} | {r.get('traders',0)} traders, {dom}% | +{mom}¢")
+            lines.append("")
+
+        if top_k:
+            lines.append("<b>⚡ Recent Kalshi signals:</b>")
+            for s in top_k:
+                up   = s.get("direction")=="UP"
+                icon = "🟢" if up else "🔴"
+                move = round(s.get("move_abs",0)*100,1)
+                lines.append(f"{icon} {s.get('title','')[:45]} | {'+' if up else ''}{move}¢")
+            lines.append("")
+
+        # Next economic event
+        events = fetch_fred_events()
+        if events:
+            nxt = events[0]
+            lines.append(f"📅 Next release: <b>{nxt['label']}</b> on {nxt['date']} at {nxt['time']}")
+
+        lines.append("\nGood luck today 🤝")
+        tg_send("\n".join(lines))
+        print(f"Morning brief sent for {today}.")
+
+    except Exception as e:
+        print(f"Morning brief error: {e}")
+        # Remove flag so it can retry next scan cycle
+        try:
+            os.remove(flag_file)
+        except:
+            pass
 
 
 def update_open_trade_prices():
@@ -271,11 +291,11 @@ def check_signal_outcomes():
                     row.outcome = outcome
                     s.commit()
                     resolved += 1
-                    icon = "\u2705" if outcome=="WON" else "\u274c"
+                    icon = "✅" if outcome=="WON" else "❌"
                     tg_send(
                         f"{icon} <b>Signal resolved: {outcome}</b>\n"
                         f"<b>{title or ticker}</b>\n"
-                        f"Direction: {sig_type} | Final: {round(cur_price*100,1)}\u00a2"
+                        f"Direction: {sig_type} | Final: {round(cur_price*100,1)}¢"
                     )
         except Exception as e:
             print(f"  Outcome error for {ticker}: {e}")
