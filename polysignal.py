@@ -29,6 +29,8 @@ from signals import (check_new_signals, check_cluster_alert, fetch_fred_events,
 
 # Seed seen signals from DB on startup
 seed_seen_signals()
+# Immediate self-ping to keep Railway awake from the start
+threading.Thread(target=self_ping, daemon=True).start()
 print("Startup complete — scheduler and self-ping running.")
 from telegram_bot import tg_send, tg_get_updates, poll_loop
 
@@ -1170,6 +1172,7 @@ async function saveConfig(){
 fetchAnalytics();
 poll();
 </script></body></html>"""
+
 
 
 if __name__ == "__main__":
