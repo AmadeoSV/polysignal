@@ -45,6 +45,47 @@ def tg_get_updates() -> List[dict]:
     except: return []
 
 
+def _parse_days(end_date: str) -> Optional[int]:
+    """Return days until end_date, or None if unparseable."""
+    if not end_date:
+        return None
+    try:
+        target = datetime.strptime(end_date[:10], "%Y-%m-%d")
+        today  = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        return (target - today).days
+    except:
+        return None
+
+
+def _time_horizon(end_date: str) -> str:
+    """
+    Classify horizon as short or long.
+    Sports games resolve same-day or next-day — treat anything <= 1 day as short.
+    Use <= 3 as a wider short-term net to catch evening games with end dates
+    set to tomorrow UTC.
+    """
+    days = _parse_days(end_date)
+    if days is None:
+        return "long"
+    return "short" if days <= 3 else "long"
+
+
+def _horizon_label(end_date: str) -> str:
+    """
+    Human-readable label for how much time is left.
+    """
+    days = _parse_days(end_date)
+    if days is None:
+        return ""
+    if days <= 0:
+        return "Resolves TODAY"
+    if days == 1:
+        return "Resolves TOMORROW"
+    if days <= 3:
+        return f"{days} days left (short-term)"
+    return f"{days} days left"
+
+
 def format_kalshi_alert(s: dict) -> str:
     up     = s["direction"] == "UP"
     icon   = "\U0001f7e2" if up else "\U0001f534"
@@ -145,26 +186,6 @@ def format_poly_alert(r: dict) -> str:
         lines.append(f"\n\u26a0\ufe0f {r.get('oppositeTraders',0)} traders opposite ({opp_pct}% of value)")
     lines.append(f"\n<a href=\"{url}\">View on Polymarket \u2197</a>")
     return "\n".join(lines)
-
-
-def _time_horizon(end_date: str) -> str:
-    if not end_date: return "long"
-    try:
-        from datetime import datetime
-        days = (datetime.strptime(end_date[:10],"%Y-%m-%d") - datetime.utcnow()).days
-        return "short" if days <= 2 else "long"
-    except: return "long"
-
-
-def _horizon_label(end_date: str) -> str:
-    if not end_date: return ""
-    try:
-        from datetime import datetime
-        days = (datetime.strptime(end_date[:10],"%Y-%m-%d") - datetime.utcnow()).days
-        if days <= 0:  return "Resolves TODAY"
-        if days == 1:  return "Resolves TOMORROW"
-        return f"{days} days left"
-    except: return ""
 
 
 def poll_loop(state_ref: dict, handle_cmd_fn):
