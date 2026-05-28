@@ -1,5 +1,5 @@
 """
-telegram_bot.py — Telegram bot polling and command handling.
+telegram_bot.py — Telegram bot polling, command handling, and alert formatting.
 """
 from __future__ import annotations
 import os, threading, time
@@ -45,8 +45,8 @@ def tg_get_updates() -> List[dict]:
     except: return []
 
 
+# ── Date helpers ───────────────────────────────────────────────────────────────
 def _parse_days(end_date: str) -> Optional[int]:
-    """Return days until end_date, or None if unparseable."""
     if not end_date:
         return None
     try:
@@ -58,12 +58,6 @@ def _parse_days(end_date: str) -> Optional[int]:
 
 
 def _time_horizon(end_date: str) -> str:
-    """
-    Classify horizon as short or long.
-    Sports games resolve same-day or next-day — treat anything <= 1 day as short.
-    Use <= 3 as a wider short-term net to catch evening games with end dates
-    set to tomorrow UTC.
-    """
     days = _parse_days(end_date)
     if days is None:
         return "long"
@@ -71,9 +65,6 @@ def _time_horizon(end_date: str) -> str:
 
 
 def _horizon_label(end_date: str) -> str:
-    """
-    Human-readable label for how much time is left.
-    """
     days = _parse_days(end_date)
     if days is None:
         return ""
@@ -86,6 +77,7 @@ def _horizon_label(end_date: str) -> str:
     return f"{days} days left"
 
 
+# ── Alert formatters ───────────────────────────────────────────────────────────
 def format_kalshi_alert(s: dict) -> str:
     up     = s["direction"] == "UP"
     icon   = "\U0001f7e2" if up else "\U0001f534"
@@ -113,8 +105,8 @@ def format_kalshi_alert(s: dict) -> str:
 
 
 def format_cluster_alert(c: dict) -> str:
-    up  = c["direction"] == "UP"
-    icon = "\U0001f7e2\U0001f7e2" if up else "\U0001f534\U0001f534"
+    up    = c["direction"] == "UP"
+    icon  = "\U0001f7e2\U0001f7e2" if up else "\U0001f534\U0001f534"
     arrow = "\U0001f4c8" if up else "\U0001f4c9"
     hor   = _horizon_label(c.get("end_date",""))
     hor_t = _time_horizon(c.get("end_date",""))
@@ -163,11 +155,11 @@ def format_poly_alert(r: dict) -> str:
         header = "\U0001f4ca POLYMARKET \u2014 SMART MONEY POSITION"
         sub    = f"Top traders holding <b>{outcome}</b>"
 
-    stars   = "\u25cf"*strength + "\u25cb"*(5-strength)
-    timing  = ("\u26a1 SHORT-TERM \u2014 resolves soon" if hor_t=="short"
-               else "\U0001f4c8 LONG-TERM \u2014 more time to enter")
-    mom_line= (f"\U0001f4c8 Up +{mom:.1f}\u00a2 since smart money entered"
-               if mom>0 else f"\U0001f4c9 Down {mom:.1f}\u00a2 since entry")
+    stars    = "\u25cf"*strength + "\u25cb"*(5-strength)
+    timing   = ("\u26a1 SHORT-TERM \u2014 resolves soon" if hor_t=="short"
+                else "\U0001f4c8 LONG-TERM \u2014 more time to enter")
+    mom_line = (f"\U0001f4c8 Up +{mom:.1f}\u00a2 since smart money entered"
+                if mom>0 else f"\U0001f4c9 Down {mom:.1f}\u00a2 since entry")
 
     lines = [
         f"<b>{header}</b>",
@@ -188,8 +180,214 @@ def format_poly_alert(r: dict) -> str:
     return "\n".join(lines)
 
 
+# ── Command formatters ─────────────────────────────────────────────────────────
+def format_cmd_help() -> str:
+    lines = [
+        "\U0001f916 <b>PolySignal Commands</b>",
+        "\u2501"*20,
+        "/brief \u2014 Morning brief on demand",
+        "/signals \u2014 Top active signals (all platforms)",
+        "/kalshi \u2014 Recent Kalshi order flow signals",
+        "/poly \u2014 Top Polymarket smart money positions",
+        "/trades \u2014 Open trades and current PnL",
+        "/stats \u2014 Signal accuracy and outcome summary",
+        "/next \u2014 Next economic release or Fed event",
+        "/help \u2014 This message",
+    ]
+    return "\n".join(lines)
+
+
+def format_cmd_brief(state_ref: dict) -> str:
+    from database import db_analytics, db_get_signals
+    a      = db_analytics()
+    sigs   = db_get_signals(limit=200)
+    active = [s for s in sigs if s.get("outcome") is None]
+    k_sigs = [s for s in active if s["platform"]=="kalshi"]
+    p_sigs = [s for s in active if s["platform"]=="polymarket"]
+
+    top_poly = state_ref.get("poly_positions",[])[:4]
+    top_k    = state_ref.get("kalshi_signals",[])[:3]
+
+    now_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    lines = [
+        f"\u2600\ufe0f <b>PolySignal Brief</b> \u2014 {now_str}",
+        "\u2501"*20,
+        f"Signals active: <b>{len(active)}</b> ({len(k_sigs)} Kalshi, {len(p_sigs)} Polymarket)",
+        f"Open trades: <b>{a['open_trades']}</b> | PnL: <b>${a['total_pnl']:+.2f}</b>",
+        "",
+    ]
+    if top_poly:
+        lines.append("<b>\U0001f4ca Top Polymarket positions:</b>")
+        for r in top_poly:
+            dom  = round(r.get("dominance",0)*100)
+            mom  = round(r.get("momentum",0)*100,1)
+            icon = "\U0001f7e2" if dom>=80 else "\U0001f7e1"
+            lines.append(f"{icon} {r.get('title','')[:45]} | {r.get('traders',0)} traders, {dom}% | +{mom}\u00a2")
+        lines.append("")
+    if top_k:
+        lines.append("<b>\u26a1 Recent Kalshi signals:</b>")
+        for s in top_k:
+            up   = s.get("direction")=="UP"
+            icon = "\U0001f7e2" if up else "\U0001f534"
+            move = round(s.get("move_abs",0)*100,1)
+            lines.append(f"{icon} {s.get('title','')[:45]} | {'+' if up else ''}{move}\u00a2")
+    return "\n".join(lines)
+
+
+def format_cmd_signals(sigs: list) -> str:
+    active = [s for s in sigs if s.get("outcome") is None]
+    if not active:
+        return "No active signals right now."
+    active.sort(key=lambda s: s.get("detected_at") or "", reverse=True)
+    lines = [
+        f"\U0001f4e1 <b>Active Signals</b> ({len(active)} total)",
+        "\u2501"*20,
+    ]
+    for s in active[:8]:
+        platform = s.get("platform","")
+        title    = (s.get("market_title") or s.get("title") or s.get("ticker",""))[:50]
+        sig_type = s.get("signal_type","")
+        icon     = "\u26a1" if platform=="kalshi" else "\U0001f4ca"
+        lines.append(f"{icon} <b>{title}</b>")
+        lines.append(f"   {platform.upper()} | {sig_type}")
+        lines.append("")
+    if len(active) > 8:
+        lines.append(f"<i>...and {len(active)-8} more.</i>")
+    return "\n".join(lines)
+
+
+def format_cmd_kalshi(sigs: list) -> str:
+    k_sigs = [s for s in sigs
+              if s.get("platform")=="kalshi" and s.get("outcome") is None]
+    k_sigs.sort(key=lambda s: s.get("detected_at") or "", reverse=True)
+    if not k_sigs:
+        return "\u26a1 No active Kalshi signals right now. Market is quiet."
+    lines = [
+        f"\u26a1 <b>Kalshi Order Flow</b> ({len(k_sigs)} active)",
+        "\u2501"*20,
+    ]
+    for s in k_sigs[:6]:
+        title = (s.get("market_title") or s.get("ticker",""))[:50]
+        stype = s.get("signal_type","")
+        up    = stype == "UP"
+        icon  = "\U0001f7e2" if up else "\U0001f534"
+        lines.append(f"{icon} <b>{title}</b>")
+        lines.append(f"   Direction: {stype}")
+        lines.append("")
+    if len(k_sigs) > 6:
+        lines.append(f"<i>...and {len(k_sigs)-6} more.</i>")
+    return "\n".join(lines)
+
+
+def format_cmd_poly(sigs: list, state_ref: dict) -> str:
+    top_poly = state_ref.get("poly_positions",[])
+    if not top_poly:
+        p_sigs = [s for s in sigs
+                  if s.get("platform")=="polymarket" and s.get("outcome") is None]
+        if not p_sigs:
+            return "\U0001f4ca No active Polymarket positions right now."
+        lines = [f"\U0001f4ca <b>Polymarket Smart Money</b> ({len(p_sigs)} active)", "\u2501"*20]
+        for s in p_sigs[:6]:
+            title = (s.get("market_title") or "")[:50]
+            lines.append(f"\u2022 <b>{title}</b>")
+            lines.append(f"   {s.get('signal_type','')} signal")
+            lines.append("")
+        return "\n".join(lines)
+
+    lines = [
+        f"\U0001f4ca <b>Polymarket Smart Money</b> ({len(top_poly)} positions)",
+        "\u2501"*20,
+    ]
+    for r in top_poly[:6]:
+        dom     = round(r.get("dominance",0)*100)
+        traders = r.get("traders",0)
+        avg_e   = round(r.get("avgEntry",0)*100,1)
+        cur_p   = round(r.get("curPrice",0)*100,1)
+        mom     = round((r.get("curPrice",0)-r.get("avgEntry",0))*100,1)
+        upside  = round(r.get("upside",0)*100,1)
+        outcome = r.get("outcome","")
+        title   = r.get("title","")[:48]
+        icon    = "\U0001f7e2" if dom>=80 else "\U0001f7e1"
+        mom_str = f"+{mom}\u00a2" if mom>=0 else f"{mom}\u00a2"
+        url     = r.get("market_url","")
+        lines.append(f"{icon} <b>{title}</b>")
+        lines.append(f"   Side: <b>{outcome}</b> | {traders} traders | {dom}% consensus")
+        lines.append(f"   Entry: {avg_e}\u00a2 \u2192 Now: {cur_p}\u00a2 ({mom_str}) | Upside: {upside}\u00a2")
+        if url:
+            lines.append(f"   <a href=\"{url}\">View \u2197</a>")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def format_cmd_trades(a: dict) -> str:
+    lines = [
+        "\U0001f4bc <b>Trades Summary</b>",
+        "\u2501"*20,
+        f"Open trades: <b>{a.get('open_trades',0)}</b>",
+        f"Closed trades: <b>{a.get('closed_trades',0)}</b>",
+        f"Total PnL: <b>${a.get('total_pnl',0):+.2f}</b>",
+    ]
+    if a.get('win_rate') is not None:
+        lines.append(f"Win rate: <b>{a.get('win_rate',0):.0%}</b>")
+    lines += ["", "<i>Log trades on the dashboard to track them here.</i>"]
+    return "\n".join(lines)
+
+
+def format_cmd_stats(sigs: list, a: dict) -> str:
+    total    = len(sigs)
+    resolved = [s for s in sigs if s.get("outcome") in ("WON","LOST")]
+    won      = [s for s in resolved if s.get("outcome")=="WON"]
+    lost     = [s for s in resolved if s.get("outcome")=="LOST"]
+    pending  = [s for s in sigs if s.get("outcome") is None]
+    win_rate = len(won)/len(resolved)*100 if resolved else 0
+
+    k_res = [s for s in resolved if s.get("platform")=="kalshi"]
+    k_won = [s for s in k_res if s.get("outcome")=="WON"]
+    p_res = [s for s in resolved if s.get("platform")=="polymarket"]
+    p_won = [s for s in p_res if s.get("outcome")=="WON"]
+
+    lines = [
+        "\U0001f4c8 <b>Signal Stats</b>",
+        "\u2501"*20,
+        f"Total signals: <b>{total}</b>",
+        f"Resolved: <b>{len(resolved)}</b> | Pending: <b>{len(pending)}</b>",
+        f"Won: <b>{len(won)}</b> | Lost: <b>{len(lost)}</b>",
+        f"Overall win rate: <b>{win_rate:.1f}%</b>",
+        "",
+    ]
+    if k_res:
+        k_wr = len(k_won)/len(k_res)*100
+        lines.append(f"\u26a1 Kalshi: {len(k_won)}/{len(k_res)} ({k_wr:.1f}%)")
+    if p_res:
+        p_wr = len(p_won)/len(p_res)*100
+        lines.append(f"\U0001f4ca Polymarket: {len(p_won)}/{len(p_res)} ({p_wr:.1f}%)")
+    lines += [
+        "",
+        f"Open trades: <b>{a.get('open_trades',0)}</b> | PnL: <b>${a.get('total_pnl',0):+.2f}</b>",
+        "",
+        "<i>Win rate builds as more signals resolve over time.</i>",
+    ]
+    return "\n".join(lines)
+
+
+def format_cmd_next(events: list) -> str:
+    if not events:
+        return "\U0001f4c5 No upcoming economic events found. FRED API may be unavailable."
+    lines = [
+        "\U0001f4c5 <b>Upcoming Economic Events</b>",
+        "\u2501"*20,
+    ]
+    for e in events[:6]:
+        imp  = e.get("importance","")
+        icon = "\U0001f534" if imp=="high" else "\U0001f7e1"
+        lines.append(f"{icon} <b>{e['label']}</b>")
+        lines.append(f"   {e['date']} at {e['time']}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+# ── Poll loop ──────────────────────────────────────────────────────────────────
 def poll_loop(state_ref: dict, handle_cmd_fn):
-    """Run in a background thread — polls for commands."""
     if not TG_TOKEN:
         print("No Telegram token — bot polling disabled.")
         return

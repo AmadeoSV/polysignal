@@ -27,7 +27,11 @@ import polymarket as poly
 from signals import (check_new_signals, check_cluster_alert, fetch_fred_events,
                      update_open_trade_prices, check_signal_outcomes,
                      send_morning_brief, seed_seen_signals, update_price_history)
-from telegram_bot import tg_send, poll_loop
+from telegram_bot import (tg_send, poll_loop,
+                           format_cmd_brief, format_cmd_signals,
+                           format_cmd_kalshi, format_cmd_poly,
+                           format_cmd_trades, format_cmd_stats,
+                           format_cmd_next, format_cmd_help)
 
 # ── Shared state ───────────────────────────────────────────────────────────────
 _lock = threading.Lock()
@@ -61,6 +65,47 @@ def utcnow_s():
     return int(datetime.now(timezone.utc).timestamp())
 
 
+# ── Telegram command handler ───────────────────────────────────────────────────
+def handle_command(text: str, chat_id: str):
+    """Dispatch Telegram bot commands."""
+    cmd = text.strip().lower().split()[0]
+    try:
+        if cmd == "/brief":
+            msg = format_cmd_brief(_st)
+        elif cmd == "/signals":
+            sigs = db_get_signals(limit=200)
+            msg  = format_cmd_signals(sigs)
+        elif cmd == "/kalshi":
+            sigs = db_get_signals(limit=200)
+            msg  = format_cmd_kalshi(sigs)
+        elif cmd == "/poly":
+            sigs = db_get_signals(limit=200)
+            msg  = format_cmd_poly(sigs, _st)
+        elif cmd == "/trades":
+            a   = db_analytics()
+            msg = format_cmd_trades(a)
+        elif cmd == "/stats":
+            sigs = db_get_signals(limit=500)
+            a    = db_analytics()
+            msg  = format_cmd_stats(sigs, a)
+        elif cmd == "/next":
+            events = fetch_fred_events()
+            msg    = format_cmd_next(events)
+        elif cmd in ("/help", "/start"):
+            msg = format_cmd_help()
+        else:
+            msg = "Unknown command. Send /help for a list of available commands."
+        tg_send(msg, chat_id=chat_id)
+    except Exception as e:
+        print(f"Command handler error ({cmd}): {e}")
+        tg_send(f"Error handling {cmd}: {e}", chat_id=chat_id)
+
+
+def tg_poll():
+    poll_loop(_st, handle_command)
+
+
+# ── Scanner functions ──────────────────────────────────────────────────────────
 def run_kalshi_scan():
     with _lock:
         if _st["scanning_kalshi"]: return
@@ -68,10 +113,10 @@ def run_kalshi_scan():
         cfg = dict(_st["config"])
     try:
         print("Kalshi scan starting…")
-        markets   = kal.fetch_markets()
+        markets     = kal.fetch_markets()
         prev_prices = {}
         print(f"  {len(markets)} markets")
-        new_sigs  = []
+        new_sigs    = []
         for i, m in enumerate(markets, 1):
             ticker = m.get("ticker","")
             if not ticker: continue
@@ -162,17 +207,13 @@ def run_poly_live():
         with _lock: _st["scanning_poly_live"] = False
 
 
-def tg_poll():
-    poll_loop(_st, lambda text, chat_id: None)
-
-
 def scheduler():
     print("Worker scheduler started.")
-    now    = time.time()
-    nk     = now
-    npp    = now + 30
-    npl    = now + 60
-    nph    = now + 3600
+    now = time.time()
+    nk  = now
+    npp = now + 30
+    npl = now + 60
+    nph = now + 3600
 
     while True:
         now = time.time()
@@ -196,5 +237,5 @@ if __name__ == "__main__":
     seed_seen_signals()
     print("Startup complete.")
 
-    threading.Thread(target=tg_poll,   daemon=True).start()
+    threading.Thread(target=tg_poll, daemon=True).start()
     scheduler()  # blocks forever — no daemon, this IS the main process
