@@ -141,7 +141,6 @@ def send_morning_brief(state_ref: dict):
 
     if now_utc.hour not in (12, 13):
         return
-
     if now_utc.minute > 10:
         return
 
@@ -169,7 +168,7 @@ def send_morning_brief(state_ref: dict):
             "☀️ <b>PolySignal Morning Brief</b>",
             "━"*20,
             f"Signals active: <b>{len(active)}</b> ({len(k_sigs)} Kalshi, {len(p_sigs)} Polymarket)",
-            f"Open trades: <b>{a['open_trades']}</b> | PnL: <b>${a['total_pnl']:+.2f}</b>",
+            f"Open trades: <b>${a['open_trades']}</b> | PnL: <b>${a['total_pnl']:+.2f}</b>",
             "",
         ]
 
@@ -234,8 +233,8 @@ def check_signal_outcomes():
     """
     For every unresolved signal check if the market has resolved.
     Updates outcome to WON or LOST automatically.
-    For Polymarket signals, extracts conditionId from platform_signal_id
-    since ticker column is not populated for Polymarket.
+    For Polymarket: uses market_url slug to hit the /events API endpoint.
+    For Kalshi: uses ticker with orderbook API.
     """
     with Session(engine) as s:
         pending = s.query(Signal).filter(
@@ -243,7 +242,7 @@ def check_signal_outcomes():
             Signal.detected_at >= datetime.utcnow() - timedelta(days=60)
         ).all()
         pending_data = [
-            (p.id, p.platform, p.ticker, p.platform_signal_id, p.signal_type, p.market_title)
+            (p.id, p.platform, p.ticker, p.market_url, p.signal_type, p.market_title)
             for p in pending
         ]
 
@@ -253,7 +252,7 @@ def check_signal_outcomes():
     print(f"Outcome check: {len(pending_data)} pending signals…")
     resolved = 0
 
-    for sig_id, platform, ticker, platform_signal_id, sig_type, title in pending_data:
+    for sig_id, platform, ticker, market_url, sig_type, title in pending_data:
         try:
             cur_price = None
 
@@ -262,26 +261,32 @@ def check_signal_outcomes():
                 if ob: cur_price = best_yes_price(ob)
 
             else:
-                # platform_signal_id format: P:0xCONDITION_ID:OUTCOME:KIND
-                # Extract the conditionId (index 1 after splitting on ":")
-                condition_id = None
-                if platform_signal_id:
-                    parts = platform_signal_id.split(":")
-                    if len(parts) >= 2:
-                        condition_id = parts[1]  # e.g. 0x1abd45a88831049ff...
+                # Extract slug from market_url
+                # e.g. https://polymarket.com/event/nhl-car-mon-2026-... → nhl-car-mon-2026-...
+                if not market_url:
+                    time.sleep(0.2)
+                    continue
 
-                if not condition_id:
+                slug = market_url.rstrip("/").split("/event/")[-1]
+                if not slug or slug == market_url:
                     time.sleep(0.2)
                     continue
 
                 try:
                     data = requests.get(
-                        f"{POLY_API}/markets",
-                        params={"clob_token_ids": condition_id},
+                        f"{POLY_API}/events",
+                        params={"slug": slug},
                         timeout=8
                     ).json()
-                    if data and isinstance(data, list) and data[0].get("outcomePrices"):
-                        cur_price = float(data[0]["outcomePrices"][0]) / 100
+
+                    if data and isinstance(data, list) and len(data) > 0:
+                        markets = data[0].get("markets", [])
+                        if markets:
+                            # Find the market matching our signal outcome direction
+                            # outcomePrices[0] = YES price, outcomePrices[1] = NO price
+                            prices = markets[0].get("outcomePrices")
+                            if prices:
+                                cur_price = float(prices[0]) / 100
                 except Exception as e:
                     print(f"  Poly outcome API error for {title}: {e}")
 
@@ -307,7 +312,7 @@ def check_signal_outcomes():
                     icon = "✅" if outcome == "WON" else "❌"
                     tg_send(
                         f"{icon} <b>Signal resolved: {outcome}</b>\n"
-                        f"<b>{title or condition_id}</b>\n"
+                        f"<b>{title or slug}</b>\n"
                         f"Direction: {sig_type} | Final: {round(cur_price*100,1)}¢"
                     )
         except Exception as e:
