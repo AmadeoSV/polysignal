@@ -57,6 +57,7 @@ class Signal(Base):
     platform_signal_id = Column(String, unique=True)
     detected_at        = Column(DateTime, default=datetime.utcnow)
     alert_sent_at      = Column(DateTime, nullable=True)
+    hours_to_close     = Column(Float, nullable=True)  # hours between signal detection and market close
     trades             = relationship("Trade", back_populates="signal")
 
 class Trade(Base):
@@ -111,6 +112,7 @@ def _run_migrations():
     """Add columns that may not exist in older DB instances."""
     migrations = [
         "ALTER TABLE signals ADD COLUMN IF NOT EXISTS alert_sent_at TIMESTAMP",
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS hours_to_close FLOAT",
         "ALTER TABLE signal_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
         "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
     ]
@@ -126,6 +128,20 @@ def _run_migrations():
 _run_migrations()
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
+
+def _calc_hours_to_close(end_date: str) -> Optional[float]:
+    """Calculate hours between now and market close time. Returns None if unparseable."""
+    if not end_date:
+        return None
+    try:
+        close = datetime.strptime(end_date[:10], "%Y-%m-%d")
+        now   = datetime.utcnow()
+        delta = close - now
+        hours = delta.total_seconds() / 3600
+        return round(hours, 1)
+    except Exception:
+        return None
+
 
 def db_save_signal(sig: dict, platform: str) -> Optional[int]:
     with Session(engine) as s:
@@ -146,6 +162,7 @@ def db_save_signal(sig: dict, platform: str) -> Optional[int]:
             market_url=sig.get("url") or f"https://polymarket.com/event/{sig.get('eventSlug','')}",
             market_close_time=sig.get("end_date") or sig.get("endDate",""),
             platform_signal_id=sig.get("sig_key",""),
+            hours_to_close=_calc_hours_to_close(sig.get("end_date") or sig.get("endDate","")),
         )
         s.add(row); s.commit(); s.refresh(row)
         return row.id
@@ -304,6 +321,7 @@ def _sig_dict(r: Signal) -> dict:
         "price_before": r.price_before, "price_after": r.price_after,
         "depth": r.depth, "outcome": r.outcome, "market_url": r.market_url,
         "detected_at": r.detected_at.strftime("%Y-%m-%d %H:%M") if r.detected_at else "",
+        "hours_to_close": r.hours_to_close,
     }
 
 def _trade_dict(r: Trade) -> dict:
@@ -376,6 +394,7 @@ def _run_migrations():
     """Add columns that may not exist in older DB instances."""
     migrations = [
         "ALTER TABLE signals ADD COLUMN IF NOT EXISTS alert_sent_at TIMESTAMP",
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS hours_to_close FLOAT",
         "ALTER TABLE signal_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
         "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
     ]
