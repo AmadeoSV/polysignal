@@ -11,7 +11,7 @@ import requests
 
 from database import Session, Signal, Trade, engine, db_update_trade_price
 from kalshi import fetch_orderbook, best_yes_price
-from telegram_bot import tg_send, format_kalshi_alert, format_cluster_alert, format_poly_alert
+from telegram_bot import tg_send, format_kalshi_alert, format_cluster_alert, format_poly_alert, format_resolution_msg
 
 POLY_API       = "https://data-api.polymarket.com"
 POLY_GAMMA_API = "https://gamma-api.polymarket.com"
@@ -382,12 +382,12 @@ def check_signal_outcomes():
                     row.outcome = outcome
                     s.commit()
                     resolved += 1
-                    icon = "\u2705" if outcome == "WON" else "\u274c"
-                    tg_send(
-                        f"{icon} <b>Signal resolved: {outcome}</b>\n"
-                        f"<b>{title or slug}</b>\n"
-                        f"Direction: {sig_type} | Final: {round(cur_price * 100, 1)}\u00a2"
-                    )
+                    tg_send(format_resolution_msg(
+                        title=title or slug,
+                        outcome=outcome,
+                        sig_type=sig_type,
+                        cur_price=cur_price,
+                    ))
         except Exception as e:
             print(f"  Outcome error for {title}: {e}")
         time.sleep(0.3)
