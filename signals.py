@@ -2,6 +2,7 @@
 signals.py — Signal checking, outcome tracking, FRED calendar, and new signal alerts.
 """
 from __future__ import annotations
+import json as _json
 import os, time, threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
@@ -26,11 +27,11 @@ FRED_RELEASES = {
 }
 
 FED_DATES = [
-    {"date": "2026-06-17", "time": "2:00pm ET", "label": "Fed Decision",           "importance": "high"},
-    {"date": "2026-07-29", "time": "2:00pm ET", "label": "Fed Decision",           "importance": "high"},
-    {"date": "2026-09-16", "time": "2:00pm ET", "label": "Fed Decision + SEP",     "importance": "high"},
-    {"date": "2026-10-28", "time": "2:00pm ET", "label": "Fed Decision",           "importance": "high"},
-    {"date": "2026-12-09", "time": "2:00pm ET", "label": "Fed Decision + SEP",     "importance": "high"},
+    {"date": "2026-06-17", "time": "2:00pm ET", "label": "Fed Decision",       "importance": "high"},
+    {"date": "2026-07-29", "time": "2:00pm ET", "label": "Fed Decision",       "importance": "high"},
+    {"date": "2026-09-16", "time": "2:00pm ET", "label": "Fed Decision + SEP", "importance": "high"},
+    {"date": "2026-10-28", "time": "2:00pm ET", "label": "Fed Decision",       "importance": "high"},
+    {"date": "2026-12-09", "time": "2:00pm ET", "label": "Fed Decision + SEP", "importance": "high"},
 ]
 
 _fred_cache: List[dict] = []
@@ -39,23 +40,53 @@ _seen_signals: Set[str] = set()
 _seen_lock = threading.Lock()
 
 
-def _parse_outcome_price(prices) -> Optional[float]:
+def _parse_outcome_price(raw_prices) -> Optional[float]:
     """
     Safely parse outcomePrices from Gamma API.
-    Gamma returns strings like '0.95' or nested lists.
-    Returns float in 0-1 range, or None if unparseable/empty.
+    Gamma returns outcomePrices as a stringified JSON list e.g. '[0.95, 0.05]'
+    or sometimes already a list. Returns YES price as float 0-1, or None.
     """
-    if not prices:
-        return None
-    raw = prices[0]
-    if isinstance(raw, list):
-        raw = raw[0]
-    val = str(raw).replace("[", "").replace("]", "").replace('"', "").strip()
-    if not val:
+    if not raw_prices:
         return None
     try:
-        return float(val)
-    except (ValueError, TypeError):
+        # If it's a string, json.loads it first
+        if isinstance(raw_prices, str):
+            prices = _json.loads(raw_prices)
+        else:
+            prices = raw_prices
+        if not prices:
+            return None
+        val = float(prices[0])
+        return val
+    except (ValueError, TypeError, _json.JSONDecodeError):
+        return None
+
+
+def _gamma_event_price(slug: str) -> Optional[float]:
+    """
+    Fetch current YES price for a Polymarket event using Gamma API.
+    Uses /events/slug/{slug} endpoint per official Polymarket docs.
+    Returns float 0-1 or None.
+    """
+    try:
+        resp = requests.get(
+            f"{POLY_GAMMA_API}/events/slug/{slug}",
+            timeout=8
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        # /events/slug/{slug} returns a single event object, not a list
+        if isinstance(data, list):
+            if not data:
+                return None
+            data = data[0]
+        markets = data.get("markets", [])
+        if not markets:
+            return None
+        prices = markets[0].get("outcomePrices")
+        return _parse_outcome_price(prices)
+    except Exception:
         return None
 
 
@@ -246,8 +277,8 @@ def update_open_trade_prices():
 def check_signal_outcomes():
     """
     For every unresolved signal check if the market has resolved.
-    Uses Gamma API (gamma-api.polymarket.com) for Polymarket lookups
-    since data-api endpoints are blocked from Railway IP range.
+    Uses Gamma API /events/slug/{slug} per official Polymarket docs.
+    outcomePrices is a stringified JSON list e.g. '[0.95, 0.05]'.
     """
     with Session(engine) as s:
         pending = s.query(Signal).filter(
@@ -273,35 +304,15 @@ def check_signal_outcomes():
                 ob = fetch_orderbook(ticker)
                 if ob:
                     cur_price = best_yes_price(ob)
-
             else:
                 if not market_url:
                     time.sleep(0.2)
                     continue
-
                 slug = market_url.rstrip("/").split("/event/")[-1]
                 if not slug or slug == market_url:
                     time.sleep(0.2)
                     continue
-
-                try:
-                    resp = requests.get(
-                        f"{POLY_GAMMA_API}/events",
-                        params={"slug": slug},
-                        timeout=8
-                    )
-                    if resp.status_code != 200:
-                        time.sleep(0.2)
-                        continue
-                    data = resp.json()
-                    if data and isinstance(data, list) and len(data) > 0:
-                        markets = data[0].get("markets", [])
-                        if markets:
-                            prices = markets[0].get("outcomePrices")
-                            if prices:
-                                cur_price = _parse_outcome_price(prices)
-                except Exception as e:
-                    print(f"  Poly outcome error for {title}: {e}")
+                cur_price = _gamma_event_price(slug)
 
             if cur_price is None:
                 time.sleep(0.2)
@@ -357,14 +368,7 @@ def update_price_history():
             else:
                 slug = (row.get("market_url") or "").rstrip("/").split("/event/")[-1]
                 if slug:
-                    resp = requests.get(f"{POLY_GAMMA_API}/events",
-                                        params={"slug": slug}, timeout=8)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if data and data[0].get("markets"):
-                            prices = data[0]["markets"][0].get("outcomePrices")
-                            if prices:
-                                cur = _parse_outcome_price(prices)
+                    cur = _gamma_event_price(slug)
             if cur is None:
                 continue
             buckets = [("15m", 15*60), ("1h", 3600), ("4h", 4*3600),
@@ -383,12 +387,9 @@ def update_price_history():
         base       = row["entry_price"]
         try:
             cur  = None
-            resp = requests.get(f"{POLY_GAMMA_API}/markets",
-                                params={"clob_token_ids": row["condition_id"]}, timeout=8)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data and data[0].get("outcomePrices"):
-                    cur = _parse_outcome_price(data[0]["outcomePrices"])
+            slug = (row.get("market_url") or "").rstrip("/").split("/event/")[-1]
+            if slug:
+                cur = _gamma_event_price(slug)
             if cur is None:
                 continue
             buckets = [("15m", 15*60), ("1h", 3600), ("4h", 4*3600),
