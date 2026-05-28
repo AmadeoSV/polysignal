@@ -39,17 +39,24 @@ _seen_signals: Set[str] = set()
 _seen_lock = threading.Lock()
 
 
-def _parse_outcome_price(prices) -> float:
+def _parse_outcome_price(prices) -> Optional[float]:
     """
     Safely parse outcomePrices from Gamma API.
     Gamma returns strings like '0.95' or nested lists.
-    Always returns a float in 0-1 range.
+    Returns float in 0-1 range, or None if unparseable/empty.
     """
+    if not prices:
+        return None
     raw = prices[0]
     if isinstance(raw, list):
         raw = raw[0]
     val = str(raw).replace("[", "").replace("]", "").replace('"', "").strip()
-    return float(val)
+    if not val:
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
 
 
 def seed_seen_signals():
