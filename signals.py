@@ -49,7 +49,6 @@ def _parse_outcome_price(raw_prices) -> Optional[float]:
     if not raw_prices:
         return None
     try:
-        # If it's a string, json.loads it first
         if isinstance(raw_prices, str):
             prices = _json.loads(raw_prices)
         else:
@@ -62,10 +61,15 @@ def _parse_outcome_price(raw_prices) -> Optional[float]:
         return None
 
 
-def _gamma_event_price(slug: str) -> Optional[float]:
+def _gamma_event_price(slug: str, market_title: str = "") -> Optional[float]:
     """
     Fetch current YES price for a Polymarket event using Gamma API.
-    Uses /events/slug/{slug} endpoint per official Polymarket docs.
+    Uses /events/slug/{slug} per official Polymarket docs.
+
+    For multi-market events (e.g. Iran peace deal with multiple date markets),
+    matches the specific sub-market by question text similarity to market_title.
+    Falls back to markets[0] only for single-market events.
+
     Returns float 0-1 or None.
     """
     try:
@@ -76,16 +80,58 @@ def _gamma_event_price(slug: str) -> Optional[float]:
         if resp.status_code != 200:
             return None
         data = resp.json()
-        # /events/slug/{slug} returns a single event object, not a list
+
+        # Handle both list and single object responses
         if isinstance(data, list):
             if not data:
                 return None
-            data = data[0]
-        markets = data.get("markets", [])
+            event = data[0]
+        else:
+            event = data
+
+        markets = event.get("markets", [])
         if not markets:
             return None
-        prices = markets[0].get("outcomePrices")
-        return _parse_outcome_price(prices)
+
+        # If only one market, use it directly
+        if len(markets) == 1:
+            return _parse_outcome_price(markets[0].get("outcomePrices"))
+
+        # Multi-market event — try to find the matching sub-market
+        # by comparing question text to our signal's market_title
+        if market_title:
+            title_lower = market_title.lower()
+            best_match = None
+            best_score = 0
+
+            for m in markets:
+                question = (m.get("question") or "").lower()
+                group_item = (m.get("groupItemTitle") or "").lower()
+                end_date = (m.get("endDate") or "")[:10]  # YYYY-MM-DD
+
+                # Score based on keyword overlap
+                score = 0
+                for word in title_lower.split():
+                    if len(word) > 3 and word in question:
+                        score += 1
+                    if len(word) > 3 and word in group_item:
+                        score += 2  # groupItemTitle is more specific
+
+                # Bonus for end date match if title contains a date fragment
+                if end_date and end_date in title_lower.replace(" ", "-"):
+                    score += 5
+
+                if score > best_score:
+                    best_score = score
+                    best_match = m
+
+            if best_match and best_score > 0:
+                return _parse_outcome_price(best_match.get("outcomePrices"))
+
+        # Fallback: if signal is unresolved multi-market and we can't match,
+        # return None rather than guessing wrong
+        return None
+
     except Exception:
         return None
 
@@ -278,7 +324,7 @@ def check_signal_outcomes():
     """
     For every unresolved signal check if the market has resolved.
     Uses Gamma API /events/slug/{slug} per official Polymarket docs.
-    outcomePrices is a stringified JSON list e.g. '[0.95, 0.05]'.
+    Matches sub-markets by title for multi-market events.
     """
     with Session(engine) as s:
         pending = s.query(Signal).filter(
@@ -312,7 +358,8 @@ def check_signal_outcomes():
                 if not slug or slug == market_url:
                     time.sleep(0.2)
                     continue
-                cur_price = _gamma_event_price(slug)
+                # Pass market_title so multi-market events match correctly
+                cur_price = _gamma_event_price(slug, title or "")
 
             if cur_price is None:
                 time.sleep(0.2)
@@ -368,7 +415,7 @@ def update_price_history():
             else:
                 slug = (row.get("market_url") or "").rstrip("/").split("/event/")[-1]
                 if slug:
-                    cur = _gamma_event_price(slug)
+                    cur = _gamma_event_price(slug, row.get("market_title") or "")
             if cur is None:
                 continue
             buckets = [("15m", 15*60), ("1h", 3600), ("4h", 4*3600),
@@ -389,7 +436,7 @@ def update_price_history():
             cur  = None
             slug = (row.get("market_url") or "").rstrip("/").split("/event/")[-1]
             if slug:
-                cur = _gamma_event_price(slug)
+                cur = _gamma_event_price(slug, row.get("market_title") or "")
             if cur is None:
                 continue
             buckets = [("15m", 15*60), ("1h", 3600), ("4h", 4*3600),
