@@ -273,17 +273,18 @@ def check_signal_outcomes():
                     continue
 
                 try:
-                    data = requests.get(
+                    resp = requests.get(
                         f"{POLY_API}/events",
                         params={"slug": slug},
                         timeout=8
-                    ).json()
-
+                    )
+                    if resp.status_code != 200:
+                        time.sleep(0.2)
+                        continue
+                    data = resp.json()
                     if data and isinstance(data, list) and len(data) > 0:
                         markets = data[0].get("markets", [])
                         if markets:
-                            # Find the market matching our signal outcome direction
-                            # outcomePrices[0] = YES price, outcomePrices[1] = NO price
                             prices = markets[0].get("outcomePrices")
                             if prices:
                                 cur_price = float(prices[0]) / 100
