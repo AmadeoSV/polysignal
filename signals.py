@@ -39,10 +39,7 @@ _seen_lock = threading.Lock()
 
 
 def seed_seen_signals():
-    """Load only ALERTED signal keys from DB on startup.
-    This prevents re-alerting signals that were sent before a restart,
-    while still allowing new signals to fire normally.
-    """
+    """Load only ALERTED signal keys from DB on startup."""
     from database import db_get_alerted_keys
     keys = db_get_alerted_keys()
     with _seen_lock:
@@ -55,9 +52,7 @@ def get_seen_signals() -> Set[str]:
 
 
 def check_new_signals(rows: List[dict], platform: str):
-    """Send Telegram alerts for signals we haven't seen before.
-    Uses DB alert_sent_at as source of truth — not in-memory set.
-    """
+    """Send Telegram alerts for signals we haven't seen before."""
     if not rows:
         return
     try:
@@ -144,20 +139,16 @@ def send_morning_brief(state_ref: dict):
 
     now_utc = datetime.now(timezone.utc)
 
-    # 8am ET = 12 UTC (EDT) or 13 UTC (EST) — check hour
     if now_utc.hour not in (12, 13):
         return
 
-    # Only fire in the first 10 minutes of the hour
     if now_utc.minute > 10:
         return
 
-    # Guard: only send once per day using a /tmp flag file
     today = now_utc.strftime("%Y-%m-%d")
     flag_file = f"/tmp/morning_brief_{today}.sent"
     if os.path.exists(flag_file):
         return
-    # Mark as sent immediately to prevent race condition
     try:
         open(flag_file, "w").close()
     except Exception as e:
@@ -168,11 +159,9 @@ def send_morning_brief(state_ref: dict):
         sigs   = db_get_signals(limit=200)
         active = [s for s in sigs if s.get("outcome") is None]
 
-        # Group by platform
         k_sigs = [s for s in active if s["platform"]=="kalshi"]
         p_sigs = [s for s in active if s["platform"]=="polymarket"]
 
-        # Top poly positions and kalshi signals from live state
         top_poly = state_ref.get("poly_positions",[])[:5]
         top_k    = state_ref.get("kalshi_signals",[])[:3]
 
@@ -202,7 +191,6 @@ def send_morning_brief(state_ref: dict):
                 lines.append(f"{icon} {s.get('title','')[:45]} | {'+' if up else ''}{move}¢")
             lines.append("")
 
-        # Next economic event
         events = fetch_fred_events()
         if events:
             nxt = events[0]
@@ -214,7 +202,6 @@ def send_morning_brief(state_ref: dict):
 
     except Exception as e:
         print(f"Morning brief error: {e}")
-        # Remove flag so it can retry next scan cycle
         try:
             os.remove(flag_file)
         except:
@@ -247,14 +234,18 @@ def check_signal_outcomes():
     """
     For every unresolved signal check if the market has resolved.
     Updates outcome to WON or LOST automatically.
+    For Polymarket signals, extracts conditionId from platform_signal_id
+    since ticker column is not populated for Polymarket.
     """
     with Session(engine) as s:
         pending = s.query(Signal).filter(
             Signal.outcome == None,
             Signal.detected_at >= datetime.utcnow() - timedelta(days=60)
         ).all()
-        pending_data = [(p.id, p.platform, p.ticker, p.signal_type, p.market_title)
-                        for p in pending]
+        pending_data = [
+            (p.id, p.platform, p.ticker, p.platform_signal_id, p.signal_type, p.market_title)
+            for p in pending
+        ]
 
     if not pending_data:
         return
@@ -262,27 +253,49 @@ def check_signal_outcomes():
     print(f"Outcome check: {len(pending_data)} pending signals…")
     resolved = 0
 
-    for sig_id, platform, ticker, sig_type, title in pending_data:
+    for sig_id, platform, ticker, platform_signal_id, sig_type, title in pending_data:
         try:
             cur_price = None
+
             if platform == "kalshi":
                 ob = fetch_orderbook(ticker)
                 if ob: cur_price = best_yes_price(ob)
-            else:
-                try:
-                    data = requests.get(f"{POLY_API}/markets",
-                        params={"clob_token_ids": ticker}, timeout=8).json()
-                    if data and isinstance(data,list) and data[0].get("outcomePrices"):
-                        cur_price = float(data[0]["outcomePrices"][0]) / 100
-                except: pass
 
-            if cur_price is None: time.sleep(0.2); continue
+            else:
+                # platform_signal_id format: P:0xCONDITION_ID:OUTCOME:KIND
+                # Extract the conditionId (index 1 after splitting on ":")
+                condition_id = None
+                if platform_signal_id:
+                    parts = platform_signal_id.split(":")
+                    if len(parts) >= 2:
+                        condition_id = parts[1]  # e.g. 0x1abd45a88831049ff...
+
+                if not condition_id:
+                    time.sleep(0.2)
+                    continue
+
+                try:
+                    data = requests.get(
+                        f"{POLY_API}/markets",
+                        params={"clob_token_ids": condition_id},
+                        timeout=8
+                    ).json()
+                    if data and isinstance(data, list) and data[0].get("outcomePrices"):
+                        cur_price = float(data[0]["outcomePrices"][0]) / 100
+                except Exception as e:
+                    print(f"  Poly outcome API error for {title}: {e}")
+
+            if cur_price is None:
+                time.sleep(0.2)
+                continue
 
             if   cur_price >= 0.95: resolved_yes = True
             elif cur_price <= 0.05: resolved_yes = False
-            else: time.sleep(0.2); continue
+            else:
+                time.sleep(0.2)
+                continue
 
-            bullish = sig_type in ("UP","BUY","OPEN_POSITION","LIVE_BUY")
+            bullish = sig_type in ("UP", "BUY", "OPEN_POSITION", "LIVE_BUY")
             outcome = "WON" if (bullish == resolved_yes) else "LOST"
 
             with Session(engine) as s:
@@ -291,14 +304,14 @@ def check_signal_outcomes():
                     row.outcome = outcome
                     s.commit()
                     resolved += 1
-                    icon = "✅" if outcome=="WON" else "❌"
+                    icon = "✅" if outcome == "WON" else "❌"
                     tg_send(
                         f"{icon} <b>Signal resolved: {outcome}</b>\n"
-                        f"<b>{title or ticker}</b>\n"
+                        f"<b>{title or condition_id}</b>\n"
                         f"Direction: {sig_type} | Final: {round(cur_price*100,1)}¢"
                     )
         except Exception as e:
-            print(f"  Outcome error for {ticker}: {e}")
+            print(f"  Outcome error for {title}: {e}")
         time.sleep(0.3)
 
     if resolved:
@@ -321,7 +334,7 @@ def update_price_history():
         sig_time = row["signal_time"]
         elapsed  = (now - sig_time).total_seconds()
         base     = row["price_at_signal"]
-        direction= 1  # signals are directional — assume UP for now, improve later
+        direction= 1
 
         try:
             if row["platform"] == "kalshi":
