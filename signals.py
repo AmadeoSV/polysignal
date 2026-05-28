@@ -12,8 +12,9 @@ from database import Session, Signal, Trade, engine, db_update_trade_price
 from kalshi import fetch_orderbook, best_yes_price
 from telegram_bot import tg_send, format_kalshi_alert, format_cluster_alert, format_poly_alert
 
-POLY_API = "https://data-api.polymarket.com"
-FRED_KEY = os.environ.get("FRED_API_KEY","")
+POLY_API       = "https://data-api.polymarket.com"
+POLY_GAMMA_API = "https://gamma-api.polymarket.com"
+FRED_KEY       = os.environ.get("FRED_API_KEY","")
 
 FRED_RELEASES = {
     10: ("CPI",              "high"),
@@ -168,7 +169,7 @@ def send_morning_brief(state_ref: dict):
             "☀️ <b>PolySignal Morning Brief</b>",
             "━"*20,
             f"Signals active: <b>{len(active)}</b> ({len(k_sigs)} Kalshi, {len(p_sigs)} Polymarket)",
-            f"Open trades: <b>${a['open_trades']}</b> | PnL: <b>${a['total_pnl']:+.2f}</b>",
+            f"Open trades: <b>{a['open_trades']}</b> | PnL: <b>${a['total_pnl']:+.2f}</b>",
             "",
         ]
 
@@ -233,8 +234,9 @@ def check_signal_outcomes():
     """
     For every unresolved signal check if the market has resolved.
     Updates outcome to WON or LOST automatically.
-    For Polymarket: uses market_url slug to hit the /events API endpoint.
-    For Kalshi: uses ticker with orderbook API.
+    Uses Polymarket Gamma API (gamma-api.polymarket.com) for event lookups
+    since data-api.polymarket.com /events and /markets endpoints are
+    restricted from Railway's IP range.
     """
     with Session(engine) as s:
         pending = s.query(Signal).filter(
@@ -273,8 +275,9 @@ def check_signal_outcomes():
                     continue
 
                 try:
+                    # Use Gamma API — publicly accessible from Railway
                     resp = requests.get(
-                        f"{POLY_API}/events",
+                        f"{POLY_GAMMA_API}/events",
                         params={"slug": slug},
                         timeout=8
                     )
@@ -289,7 +292,7 @@ def check_signal_outcomes():
                             if prices:
                                 cur_price = float(prices[0]) / 100
                 except Exception as e:
-                    print(f"  Poly outcome API error for {title}: {e}")
+                    print(f"  Poly outcome error for {title}: {e}")
 
             if cur_price is None:
                 time.sleep(0.2)
@@ -347,9 +350,15 @@ def update_price_history():
                 ob = fetch_orderbook(row["ticker"])
                 cur = best_yes_price(ob) if ob else None
             else:
-                data = requests.get(f"{POLY_API}/markets",
-                    params={"clob_token_ids": row["ticker"]}, timeout=8).json()
-                cur = float(data[0]["outcomePrices"][0])/100 if data and data[0].get("outcomePrices") else None
+                resp = requests.get(
+                    f"{POLY_GAMMA_API}/markets",
+                    params={"slug": row.get("ticker","")},
+                    timeout=8
+                )
+                cur = None
+                if resp.status_code == 200:
+                    data = resp.json()
+                    cur = float(data[0]["outcomePrices"][0])/100 if data and data[0].get("outcomePrices") else None
 
             if cur is None: continue
 
@@ -376,9 +385,15 @@ def update_price_history():
         base       = row["entry_price"]
 
         try:
-            data = requests.get(f"{POLY_API}/markets",
-                params={"clob_token_ids": row["condition_id"]}, timeout=8).json()
-            cur = float(data[0]["outcomePrices"][0])/100 if data and data[0].get("outcomePrices") else None
+            resp = requests.get(
+                f"{POLY_GAMMA_API}/markets",
+                params={"clob_token_ids": row["condition_id"]},
+                timeout=8
+            )
+            cur = None
+            if resp.status_code == 200:
+                data = resp.json()
+                cur = float(data[0]["outcomePrices"][0])/100 if data and data[0].get("outcomePrices") else None
             if cur is None: continue
 
             buckets = [("15m",15*60),("1h",3600),("4h",4*3600),("24h",24*3600),("7d",7*24*3600)]
