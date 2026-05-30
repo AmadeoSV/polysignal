@@ -58,6 +58,10 @@ class Signal(Base):
     detected_at        = Column(DateTime, default=datetime.utcnow)
     alert_sent_at      = Column(DateTime, nullable=True)
     hours_to_close     = Column(Float, nullable=True)  # hours between signal detection and market close
+    trader_count       = Column(Integer, nullable=True) # number of top traders on same side
+    dominance          = Column(Float, nullable=True)   # consensus % (0-1)
+    signal_strength    = Column(Integer, nullable=True) # 1-5 stars
+    opposite_traders   = Column(Integer, nullable=True) # traders on opposite side
     trades             = relationship("Trade", back_populates="signal")
 
 class Trade(Base):
@@ -113,6 +117,10 @@ def _run_migrations():
     migrations = [
         "ALTER TABLE signals ADD COLUMN IF NOT EXISTS alert_sent_at TIMESTAMP",
         "ALTER TABLE signals ADD COLUMN IF NOT EXISTS hours_to_close FLOAT",
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS trader_count INTEGER",
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS dominance FLOAT",
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS signal_strength INTEGER",
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS opposite_traders INTEGER",
         "ALTER TABLE signal_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
         "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
     ]
@@ -163,6 +171,10 @@ def db_save_signal(sig: dict, platform: str) -> Optional[int]:
             market_close_time=sig.get("end_date") or sig.get("endDate",""),
             platform_signal_id=sig.get("sig_key",""),
             hours_to_close=_calc_hours_to_close(sig.get("end_date") or sig.get("endDate","")),
+            trader_count=sig.get("traders") or sig.get("tradersHolding"),
+            dominance=sig.get("dominance"),
+            signal_strength=sig.get("strength"),
+            opposite_traders=sig.get("oppositeTraders"),
         )
         s.add(row); s.commit(); s.refresh(row)
         return row.id
@@ -322,6 +334,10 @@ def _sig_dict(r: Signal) -> dict:
         "depth": r.depth, "outcome": r.outcome, "market_url": r.market_url,
         "detected_at": r.detected_at.strftime("%Y-%m-%d %H:%M") if r.detected_at else "",
         "hours_to_close": r.hours_to_close,
+        "trader_count": r.trader_count,
+        "dominance": r.dominance,
+        "signal_strength": r.signal_strength,
+        "opposite_traders": r.opposite_traders,
     }
 
 def _trade_dict(r: Trade) -> dict:
@@ -395,6 +411,10 @@ def _run_migrations():
     migrations = [
         "ALTER TABLE signals ADD COLUMN IF NOT EXISTS alert_sent_at TIMESTAMP",
         "ALTER TABLE signals ADD COLUMN IF NOT EXISTS hours_to_close FLOAT",
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS trader_count INTEGER",
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS dominance FLOAT",
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS signal_strength INTEGER",
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS opposite_traders INTEGER",
         "ALTER TABLE signal_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
         "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
     ]
