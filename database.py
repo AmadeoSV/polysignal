@@ -310,7 +310,9 @@ def db_get_alerted_keys() -> set:
         ).all()
         return {r[0] for r in rows if r[0]}
 
-def db_cleanup(days_to_keep=7):
+def db_cleanup(days_to_keep=2):
+    # 2-day retention: at ~60s snapshots across 200 markets, 7 days filled the
+    # entire Railway volume (290MB). 2 days caps steady-state well under 100MB.
     cutoff = datetime.utcnow() - timedelta(days=days_to_keep)
     with Session(engine) as s:
         n = s.query(MarketSnapshot).filter(MarketSnapshot.snapshot_time<cutoff).delete()
@@ -323,7 +325,16 @@ def db_size_mb() -> float:
     if "sqlite" in DATABASE_URL:
         try: return round(os.path.getsize(DB_PATH)/1_048_576, 2)
         except: return 0.0
-    return 0.0  # PostgreSQL size not tracked locally
+    # PostgreSQL: ask the server for the actual database size
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            size = conn.execute(text(
+                "SELECT pg_database_size(current_database())"
+            )).scalar()
+            return round((size or 0) / 1_048_576, 2)
+    except Exception:
+        return 0.0
 
 def _sig_dict(r: Signal) -> dict:
     return {

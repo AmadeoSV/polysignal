@@ -17,11 +17,13 @@ PORT              = int(os.environ.get("PORT", 5050))
 KALSHI_INTERVAL   = 60
 POLY_POS_INTERVAL = 300
 POLY_LIVE_INTERVAL= 90
+SNAPSHOT_INTERVAL = 300   # persist market snapshots every 5 min (scans still run every 60s)
 
 # ── Imports ────────────────────────────────────────────────────────────────────
 from database import (engine, db_save_signal, db_get_signals,
                       db_mark_alert_sent, db_get_alerted_keys,
-                      db_analytics, db_cleanup, db_size_mb, Session, Trade)
+                      db_analytics, db_cleanup, db_size_mb, Session, Trade,
+                      MarketSnapshot)
 import kalshi as kal
 import polymarket as poly
 from signals import (check_new_signals, check_cluster_alert, fetch_fred_events,
@@ -35,6 +37,7 @@ from telegram_bot import (tg_send, poll_loop,
 
 # ── Shared state ───────────────────────────────────────────────────────────────
 _lock = threading.Lock()
+_last_snapshot_write = 0.0  # snapshots persist on first scan, then every SNAPSHOT_INTERVAL
 _st = {
     "config": {
         "min_move":          0.03,
@@ -117,6 +120,15 @@ def run_kalshi_scan():
         prev_prices = {}
         print(f"  {len(markets)} markets")
         new_sigs    = []
+
+        # Throttle snapshot persistence: scans run every 60s for signal
+        # detection, but snapshots only need to be written every 5 min.
+        # (60s snapshots x 200 markets x 7 days = ~2M rows = full volume.)
+        global _last_snapshot_write
+        now_ts        = time.time()
+        write_snaps   = (now_ts - _last_snapshot_write) >= SNAPSHOT_INTERVAL
+        snapshot_rows = []
+
         for i, m in enumerate(markets, 1):
             ticker = m.get("ticker","")
             if not ticker: continue
@@ -135,18 +147,25 @@ def run_kalshi_scan():
                     check_cluster_alert(cluster)
             if cur is not None:
                 prev_prices[ticker] = cur
-            from database import MarketSnapshot
-            try:
-                with Session(engine) as s:
-                    s.add(MarketSnapshot(
-                        platform="kalshi", ticker=ticker,
-                        yes_price=cur or 0,
-                        depth=kal.orderbook_depth(ob),
-                    ))
-                    s.commit()
-            except: pass
+            if write_snaps:
+                snapshot_rows.append(MarketSnapshot(
+                    platform="kalshi", ticker=ticker,
+                    yes_price=cur or 0,
+                    depth=kal.orderbook_depth(ob),
+                ))
             if i % 50 == 0:
                 print(f"  kalshi {i}/{len(markets)}")
+
+        # One batched commit instead of one session per market
+        if write_snaps and snapshot_rows:
+            try:
+                with Session(engine) as s:
+                    s.add_all(snapshot_rows)
+                    s.commit()
+                _last_snapshot_write = now_ts
+                print(f"  {len(snapshot_rows)} snapshots persisted.")
+            except Exception as e:
+                print(f"  snapshot write failed: {e}")
         check_new_signals(new_sigs, "kalshi")
         with _lock:
             _st["kalshi_signals"]  = new_sigs
