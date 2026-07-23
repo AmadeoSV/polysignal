@@ -10,7 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-POLY_API = "https://data-api.polymarket.com"
+POLY_API       = "https://data-api.polymarket.com"
+POLY_GAMMA_API = "https://gamma-api.polymarket.com"
 
 
 def get_json(url, params=None, retries=3, pause=0.7):
@@ -217,6 +218,30 @@ def scan_positions(traders, cfg) -> List[dict]:
     return build_signals(raw, meta, "OPEN_POSITION", cfg, len(traders))
 
 
+def fetch_market_end_date(slug: str) -> str:
+    """
+    Look up a market's close date via Gamma using its market-level slug.
+
+    /trades (which powers scan_live/LIVE_BUY) never returns an endDate —
+    only /positions does — so LIVE_BUY signals were always missing
+    hours_to_close downstream. /positions signals (OPEN_POSITION) don't
+    need this, they get endDate for free.
+
+    Best-effort: returns "" on any failure. This is enrichment, not
+    required for the scan to keep running.
+    """
+    if not slug:
+        return ""
+    try:
+        r = requests.get(f"{POLY_GAMMA_API}/markets/slug/{slug}",
+                         headers={"Accept":"application/json"}, timeout=6)
+        if r.status_code != 200:
+            return ""
+        return str(r.json().get("endDate") or "")
+    except Exception:
+        return ""
+
+
 def scan_live(traders, cfg) -> List[dict]:
     import time as _time
     cutoff = int(_time.time()) - cfg["poly_window_min"]*60
@@ -245,4 +270,14 @@ def scan_live(traders, cfg) -> List[dict]:
                 "curPrice": price,
             })
         time.sleep(0.2)
-    return build_signals(raw, meta, "LIVE_BUY", cfg, len(traders))
+    results = build_signals(raw, meta, "LIVE_BUY", cfg, len(traders))
+
+    # Backfill close date for signals that cleared the filter — /trades
+    # never has it, so look it up via Gamma for just this small set
+    # rather than every raw trade seen during the scan.
+    for r in results:
+        if not r.get("endDate") and r.get("slug"):
+            r["endDate"] = fetch_market_end_date(r["slug"])
+            time.sleep(0.15)
+
+    return results
