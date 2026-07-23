@@ -23,7 +23,8 @@ SNAPSHOT_INTERVAL = 300   # persist market snapshots every 5 min (scans still ru
 from database import (engine, db_save_signal, db_get_signals,
                       db_mark_alert_sent, db_get_alerted_keys,
                       db_analytics, db_cleanup, db_size_mb, Session, Trade,
-                      MarketSnapshot, db_init_signal_price_history)
+                      MarketSnapshot, db_init_signal_price_history,
+                      db_init_trader_entry)
 import kalshi as kal
 import polymarket as poly
 from signals import (check_new_signals, check_cluster_alert, fetch_fred_events,
@@ -217,6 +218,20 @@ def run_poly_positions():
                     )
                 except Exception as e:
                     print(f"  price history init failed ({r['conditionId']}): {e}")
+            # Seed per-trader tracking too — was defined in database.py but
+            # never actually called from anywhere, so trader_price_history
+            # has been sitting empty. Uses market-level slug (r["slug"]),
+            # which is reliable on both /positions and /trades, unlike
+            # eventSlug which is often blank.
+            for tr in r.get("topTraders", []):
+                try:
+                    db_init_trader_entry(
+                        r["conditionId"], r["outcome"], r.get("title", ""),
+                        tr["rank"], tr["username"], tr["avgPrice"],
+                        r.get("slug", "")
+                    )
+                except Exception as e:
+                    print(f"  trader entry init failed ({tr.get('username')}): {e}")
         check_new_signals(rows, "polymarket")
         with _lock:
             _st["poly_positions"]    = rows
@@ -247,6 +262,15 @@ def run_poly_live():
                     )
                 except Exception as e:
                     print(f"  price history init failed ({r['conditionId']}): {e}")
+            for tr in r.get("topTraders", []):
+                try:
+                    db_init_trader_entry(
+                        r["conditionId"], r["outcome"], r.get("title", ""),
+                        tr["rank"], tr["username"], tr["avgPrice"],
+                        r.get("slug", "")
+                    )
+                except Exception as e:
+                    print(f"  trader entry init failed ({tr.get('username')}): {e}")
         check_new_signals(rows, "polymarket")
         with _lock:
             _st["poly_live"]          = rows

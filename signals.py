@@ -136,6 +136,31 @@ def _gamma_event_price(slug: str, market_title: str = "") -> Optional[float]:
         return None
 
 
+def _gamma_market_price(slug: str) -> Optional[float]:
+    """
+    Fetch current YES price for a single Polymarket market using its
+    market-level slug (not event slug) via /markets/slug/{slug}.
+
+    Unlike _gamma_event_price, this needs no sub-market matching — the
+    endpoint returns exactly one market object with outcomePrices
+    directly on it. Market-level slug is reliably present on both
+    /positions and /trades responses (eventSlug is often empty on
+    trades), so this is the more robust lookup for trader-entry
+    tracking specifically.
+
+    Returns float 0-1 or None.
+    """
+    if not slug:
+        return None
+    try:
+        resp = requests.get(f"{POLY_GAMMA_API}/markets/slug/{slug}", timeout=8)
+        if resp.status_code != 200:
+            return None
+        return _parse_outcome_price(resp.json().get("outcomePrices"))
+    except Exception:
+        return None
+
+
 def seed_seen_signals():
     from database import db_get_alerted_keys
     keys = db_get_alerted_keys()
@@ -433,10 +458,7 @@ def update_price_history():
         elapsed    = (now - entry_time).total_seconds()
         base       = row["entry_price"]
         try:
-            cur  = None
-            slug = (row.get("market_url") or "").rstrip("/").split("/event/")[-1]
-            if slug:
-                cur = _gamma_event_price(slug, row.get("market_title") or "")
+            cur = _gamma_market_price(row.get("market_slug") or "")
             if cur is None:
                 continue
             buckets = [("15m", 15*60), ("1h", 3600), ("4h", 4*3600),

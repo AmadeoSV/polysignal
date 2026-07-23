@@ -123,6 +123,7 @@ def _run_migrations():
         "ALTER TABLE signals ADD COLUMN IF NOT EXISTS opposite_traders INTEGER",
         "ALTER TABLE signal_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
         "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
+        "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS market_slug VARCHAR",
     ]
     with engine.connect() as conn:
         for sql in migrations:
@@ -398,6 +399,7 @@ class TraderPriceHistory(Base):
     condition_id    = Column(String, index=True)
     outcome         = Column(String)
     market_title    = Column(Text)
+    market_slug     = Column(String, nullable=True)
     trader_rank     = Column(Integer)
     trader_username = Column(String)
     entry_price     = Column(Float)
@@ -428,6 +430,7 @@ def _run_migrations():
         "ALTER TABLE signals ADD COLUMN IF NOT EXISTS opposite_traders INTEGER",
         "ALTER TABLE signal_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
         "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
+        "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS market_slug VARCHAR",
     ]
     with engine.connect() as conn:
         for sql in migrations:
@@ -455,7 +458,8 @@ def db_init_signal_price_history(signal_id: int, ticker: str, platform: str,
 
 
 def db_init_trader_entry(condition_id: str, outcome: str, title: str,
-                          rank: int, username: str, entry_price: float):
+                          rank: int, username: str, entry_price: float,
+                          slug: str = ""):
     """Record a trader entry for price-after tracking. One row per trader per market."""
     with Session(engine) as s:
         existing = s.query(TraderPriceHistory).filter_by(
@@ -465,7 +469,7 @@ def db_init_trader_entry(condition_id: str, outcome: str, title: str,
         if existing: return
         s.add(TraderPriceHistory(
             platform="polymarket", condition_id=condition_id,
-            outcome=outcome, market_title=title,
+            outcome=outcome, market_title=title, market_slug=slug,
             trader_rank=rank, trader_username=username,
             entry_price=entry_price,
         ))
@@ -513,6 +517,7 @@ def db_get_pending_trader_history() -> List[dict]:
         ).all()
         return [{"id":r.id,"condition_id":r.condition_id,"outcome":r.outcome,
                  "entry_price":r.entry_price,"entry_time":r.entry_time,
+                 "market_slug":r.market_slug,"market_title":r.market_title,
                  "price_15m":r.price_15m,"price_1h":r.price_1h,
                  "price_4h":r.price_4h,"price_24h":r.price_24h,
                  "price_7d":r.price_7d} for r in rows]
