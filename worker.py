@@ -47,7 +47,10 @@ _st = {
         "poly_min_total":    500.0,
         "poly_dominance":    0.65,
         "poly_min_momentum": 0.08,
-        "poly_max_price":    0.80,
+        "poly_max_price":    0.45,   # was 0.80 — edge analysis on 6,350 outcomes showed
+                                     # positive expected value only below ~50c, and it's
+                                     # already thin by 45c; above that, edge goes negative
+                                     # and gets steadily worse up to -56c at 80c+
         "poly_min_value":    250.0,
         "poly_window_min":   30,
     },
