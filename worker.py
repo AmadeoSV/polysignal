@@ -23,7 +23,7 @@ SNAPSHOT_INTERVAL = 300   # persist market snapshots every 5 min (scans still ru
 from database import (engine, db_save_signal, db_get_signals,
                       db_mark_alert_sent, db_get_alerted_keys,
                       db_analytics, db_cleanup, db_size_mb, Session, Trade,
-                      MarketSnapshot)
+                      MarketSnapshot, db_init_signal_price_history)
 import kalshi as kal
 import polymarket as poly
 from signals import (check_new_signals, check_cluster_alert, fetch_fred_events,
@@ -140,6 +140,18 @@ def run_kalshi_scan():
             if sig:
                 new_sigs.append(sig)
                 sig["db_id"] = db_save_signal(sig, "kalshi")
+                # Seed price-after tracking so update_price_history() has
+                # something to fill in at the 15m/1h/4h/24h/7d buckets.
+                # (Previously only wired up in polysignal.py, which never runs
+                # scans — so this table stayed essentially empty.)
+                if sig["db_id"]:
+                    try:
+                        db_init_signal_price_history(
+                            sig["db_id"], ticker, "kalshi",
+                            datetime.utcnow(), sig["cur_price"]
+                        )
+                    except Exception as e:
+                        print(f"  price history init failed ({ticker}): {e}")
                 cluster = kal.check_accumulator(ticker, m, sig,
                                                 cur or 0,
                                                 kal.orderbook_depth(ob))
@@ -193,7 +205,15 @@ def run_poly_positions():
         rows    = poly.scan_positions(traders, cfg)
         for r in rows:
             r["sig_key"] = f"P:{r['conditionId']}:{r['outcome']}"
-            db_save_signal(r, "polymarket")
+            r["db_id"]   = db_save_signal(r, "polymarket")
+            if r["db_id"]:
+                try:
+                    db_init_signal_price_history(
+                        r["db_id"], r["conditionId"], "polymarket",
+                        datetime.utcnow(), r.get("curPrice", 0)
+                    )
+                except Exception as e:
+                    print(f"  price history init failed ({r['conditionId']}): {e}")
         check_new_signals(rows, "polymarket")
         with _lock:
             _st["poly_positions"]    = rows
@@ -215,7 +235,15 @@ def run_poly_live():
         print(f"Poly live scan: {len(traders)} traders, {len(rows)} signals found")
         for r in rows:
             r["sig_key"] = f"P:{r['conditionId']}:{r['outcome']}:LIVE_BUY"
-            db_save_signal(r, "polymarket")
+            r["db_id"]   = db_save_signal(r, "polymarket")
+            if r["db_id"]:
+                try:
+                    db_init_signal_price_history(
+                        r["db_id"], r["conditionId"], "polymarket",
+                        datetime.utcnow(), r.get("curPrice", 0)
+                    )
+                except Exception as e:
+                    print(f"  price history init failed ({r['conditionId']}): {e}")
         check_new_signals(rows, "polymarket")
         with _lock:
             _st["poly_live"]          = rows

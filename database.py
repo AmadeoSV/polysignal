@@ -476,19 +476,28 @@ def db_get_pending_price_history() -> List[dict]:
     """Return signal price history rows that still have unfilled time buckets."""
     now = datetime.utcnow()
     with Session(engine) as s:
-        rows = s.query(SignalPriceHistory).filter(
-            SignalPriceHistory.signal_time >= now - timedelta(days=8),
-            (SignalPriceHistory.price_7d == None) |
-            (SignalPriceHistory.price_24h == None) |
-            (SignalPriceHistory.price_1h == None) |
-            (SignalPriceHistory.price_15m == None)
-        ).all()
-        return [{"id":r.id,"signal_id":r.signal_id,"ticker":r.ticker,
-                 "platform":r.platform,"signal_time":r.signal_time,
-                 "price_at_signal":r.price_at_signal,
-                 "price_15m":r.price_15m,"price_1h":r.price_1h,
-                 "price_4h":r.price_4h,"price_24h":r.price_24h,
-                 "price_7d":r.price_7d} for r in rows]
+        rows = (
+            s.query(SignalPriceHistory, Signal.market_url, Signal.market_title)
+            .join(Signal, Signal.id == SignalPriceHistory.signal_id)
+            .filter(
+                SignalPriceHistory.signal_time >= now - timedelta(days=8),
+                (SignalPriceHistory.price_7d == None) |
+                (SignalPriceHistory.price_24h == None) |
+                (SignalPriceHistory.price_1h == None) |
+                (SignalPriceHistory.price_15m == None)
+            ).all()
+        )
+        return [{"id":r.SignalPriceHistory.id,"signal_id":r.SignalPriceHistory.signal_id,
+                 "ticker":r.SignalPriceHistory.ticker,
+                 "platform":r.SignalPriceHistory.platform,
+                 "signal_time":r.SignalPriceHistory.signal_time,
+                 "price_at_signal":r.SignalPriceHistory.price_at_signal,
+                 "price_15m":r.SignalPriceHistory.price_15m,
+                 "price_1h":r.SignalPriceHistory.price_1h,
+                 "price_4h":r.SignalPriceHistory.price_4h,
+                 "price_24h":r.SignalPriceHistory.price_24h,
+                 "price_7d":r.SignalPriceHistory.price_7d,
+                 "market_url":r.market_url,"market_title":r.market_title} for r in rows]
 
 
 def db_get_pending_trader_history() -> List[dict]:
