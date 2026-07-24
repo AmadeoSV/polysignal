@@ -136,6 +136,39 @@ def _gamma_event_price(slug: str, market_title: str = "") -> Optional[float]:
         return None
 
 
+def _gamma_market_closed_status(condition_id: str) -> Optional[dict]:
+    """
+    Look up whether a market has actually closed, via its condition_id
+    (reliably present on every Polymarket signal's platform_signal_id,
+    unlike event slug which is often blank for LIVE_BUY).
+
+    Returns {"closed": bool, "price": float or None} or None on failure.
+
+    This exists because price alone (e.g. price >= 0.95) was previously
+    used as a proxy for "market resolved" — which is wrong. A live,
+    volatile market (a close tennis match, a tight game) can legitimately
+    spike to 99c on a single dramatic moment without actually being over.
+    Only a market's own "closed" flag means the outcome is final.
+    """
+    if not condition_id:
+        return None
+    try:
+        resp = requests.get(f"{POLY_GAMMA_API}/markets",
+                            params={"condition_ids": condition_id}, timeout=8)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if not data:
+            return None
+        m = data[0]
+        return {
+            "closed": bool(m.get("closed", False)),
+            "price":  _parse_outcome_price(m.get("outcomePrices")),
+        }
+    except Exception:
+        return None
+
+
 def _gamma_market_price(slug: str) -> Optional[float]:
     """
     Fetch current YES price for a single Polymarket market using its
@@ -347,9 +380,19 @@ def update_open_trade_prices():
 
 def check_signal_outcomes():
     """
-    For every unresolved signal check if the market has resolved.
-    Uses Gamma API /events/slug/{slug} per official Polymarket docs.
-    Matches sub-markets by title for multi-market events.
+    For every unresolved signal check if the market has ACTUALLY closed.
+
+    Previously this used price >= 0.95 / <= 0.05 as a proxy for
+    "resolved" — which is wrong for live, volatile markets. A close
+    match can legitimately spike to 99c on one dramatic moment without
+    the match being over, and once a signal's outcome is set it's never
+    re-checked (Signal.outcome == None filter excludes it forever) — so
+    a single price spike could permanently mislabel a still-live signal.
+
+    Now: for Polymarket, pull condition_id from platform_signal_id and
+    check the market's own "closed" flag via Gamma before trusting its
+    price as final. Kalshi's path (orderbook-based) is separate and
+    unaffected — that mechanism doesn't have this failure mode.
     """
     with Session(engine) as s:
         pending = s.query(Signal).filter(
@@ -357,7 +400,8 @@ def check_signal_outcomes():
             Signal.detected_at >= datetime.utcnow() - timedelta(days=60)
         ).all()
         pending_data = [
-            (p.id, p.platform, p.ticker, p.market_url, p.signal_type, p.market_title)
+            (p.id, p.platform, p.ticker, p.market_url, p.signal_type,
+             p.market_title, p.platform_signal_id)
             for p in pending
         ]
 
@@ -367,7 +411,7 @@ def check_signal_outcomes():
     print(f"Outcome check: {len(pending_data)} pending signals...")
     resolved = 0
 
-    for sig_id, platform, ticker, market_url, sig_type, title in pending_data:
+    for sig_id, platform, ticker, market_url, sig_type, title, sig_key in pending_data:
         try:
             cur_price = None
 
@@ -375,28 +419,33 @@ def check_signal_outcomes():
                 ob = fetch_orderbook(ticker)
                 if ob:
                     cur_price = best_yes_price(ob)
-            else:
-                if not market_url:
+                if cur_price is None:
                     time.sleep(0.2)
                     continue
-                slug = market_url.rstrip("/").split("/event/")[-1]
-                if not slug or slug == market_url:
+                if cur_price >= 0.95:
+                    resolved_yes = True
+                elif cur_price <= 0.05:
+                    resolved_yes = False
+                else:
                     time.sleep(0.2)
                     continue
-                # Pass market_title so multi-market events match correctly
-                cur_price = _gamma_event_price(slug, title or "")
-
-            if cur_price is None:
-                time.sleep(0.2)
-                continue
-
-            if cur_price >= 0.95:
-                resolved_yes = True
-            elif cur_price <= 0.05:
-                resolved_yes = False
             else:
-                time.sleep(0.2)
-                continue
+                # sig_key format: "P:{conditionId}:{outcome}" or
+                # "P:{conditionId}:{outcome}:LIVE_BUY"
+                parts = (sig_key or "").split(":")
+                condition_id = parts[1] if len(parts) >= 2 else ""
+                status = _gamma_market_closed_status(condition_id)
+                if status is None or not status["closed"]:
+                    # Not actually closed yet — genuinely still pending,
+                    # regardless of what the live price happens to be
+                    # doing right now.
+                    time.sleep(0.2)
+                    continue
+                cur_price = status["price"]
+                if cur_price is None:
+                    time.sleep(0.2)
+                    continue
+                resolved_yes = cur_price >= 0.5
 
             bullish = sig_type in ("UP", "BUY", "OPEN_POSITION", "LIVE_BUY")
             outcome = "WON" if (bullish == resolved_yes) else "LOST"
@@ -408,7 +457,7 @@ def check_signal_outcomes():
                     s.commit()
                     resolved += 1
                     tg_send(format_resolution_msg(
-                        title=title or slug,
+                        title=title or ticker or "market",
                         outcome=outcome,
                         sig_type=sig_type,
                         cur_price=cur_price,
