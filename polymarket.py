@@ -265,13 +265,23 @@ def scan_live(traders, cfg) -> List[dict]:
                 "value":val,"size":af(fp(tr,["size","amount","shares"])),
                 "avgPrice":price,"timestamp":ts,
             })
-            meta.setdefault(key,{
-                "title":    str(fp(tr,["title","question","slug"],"")),
-                "slug":     str(fp(tr,["slug","marketSlug"],"")),
-                "eventSlug":str(tr.get("eventSlug") or ""),
-                "endDate":  str(tr.get("endDate") or ""),
-                "curPrice": price,
-            })
+            # Was meta.setdefault(), which only ever set curPrice from
+            # whichever trade got processed FIRST (traders looped in rank
+            # order) — an arbitrary, potentially stale trade price, not the
+            # actual current market price. This is what let signals through
+            # with a real price far above poly_max_price: the filter was
+            # checking a stale number. Now we keep the most RECENT trade's
+            # price instead, tracked by timestamp.
+            existing = meta.get(key)
+            if existing is None or ts >= existing.get("_ts", 0):
+                meta[key] = {
+                    "title":    str(fp(tr,["title","question","slug"],"")),
+                    "slug":     str(fp(tr,["slug","marketSlug"],"")),
+                    "eventSlug":str(tr.get("eventSlug") or ""),
+                    "endDate":  str(tr.get("endDate") or ""),
+                    "curPrice": price,
+                    "_ts":      ts,
+                }
         time.sleep(0.2)
     results = build_signals(raw, meta, "LIVE_BUY", cfg, len(traders))
 
