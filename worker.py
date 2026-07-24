@@ -248,6 +248,9 @@ def run_poly_live():
         _st["scanning_poly_live"] = True
         cfg = dict(_st["config"])
     try:
+        # Debug: confirm the actual runtime config, since we're seeing
+        # signals above poly_max_price despite the filter fix being deployed.
+        print(f"  [config check] poly_max_price={cfg.get('poly_max_price')}")
         traders = poly.fetch_leaderboard(cfg["poly_top"])
         rows    = poly.scan_live(traders, cfg)
         print(f"Poly live scan: {len(traders)} traders, {len(rows)} signals found")
