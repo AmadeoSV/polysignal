@@ -10,19 +10,27 @@ matching, which could grab a sibling market's price on multi-market
 events. Both bugs could permanently mislabel a signal's outcome, since
 once outcome is set it's never re-checked.
 
-This script re-checks every historically resolved Polymarket signal
-using the CORRECT method (condition_id -> Gamma's own "closed" flag)
-and reports:
-  - FALSE_RESOLUTION: market isn't actually closed yet — was marked
-    resolved based on a price spike or bad market match, not reality.
+This version fixes two more things found while building it:
+  - Gamma's /markets?condition_ids= search doesn't reliably index older
+    or settled sports markets. The CLOB API (clob.polymarket.com) does,
+    and returns an explicit closed flag plus a per-outcome "winner"
+    boolean — so CLOB is now the primary source, Gamma a fallback.
+  - Comparing "price >= 0.5" generically is wrong for named-outcome
+    markets (Over/Under, named candidates, etc.) — you have to check
+    whether the SPECIFIC recorded outcome (e.g. "Raphael Collignon",
+    "Over") is the one that actually won, not just whether some price
+    crossed 50%. This version matches by name against CLOB's tokens
+    or Gamma's outcomes list.
+
+Reports:
+  - FALSE_RESOLUTION: market isn't actually closed yet.
   - OUTCOME_MISMATCH: market IS closed, but the recorded WON/LOST
-    doesn't match what the market actually settled to.
+    doesn't match what actually happened.
   - OK: recorded outcome matches the real, closed, final result.
+  - UNVERIFIABLE: neither CLOB nor Gamma had usable data.
 
 Usage:
     python3 audit_outcomes.py "postgresql://...connection-string..."
-
-    # To also generate a SQL fix file (does NOT touch your DB itself):
     python3 audit_outcomes.py "postgresql://..." --write-fixes fixes.sql
 """
 import subprocess
@@ -34,10 +42,14 @@ import urllib.error
 
 PSQL = "/opt/homebrew/opt/libpq/bin/psql"
 GAMMA_API = "https://gamma-api.polymarket.com"
+CLOB_API = "https://clob.polymarket.com"
+UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+
+_first_error_shown = [False]
 
 
 def run_query(db_url: str, sql: str) -> list[str]:
-    """Run a query via psql, return raw pipe-delimited rows."""
     result = subprocess.run(
         [PSQL, db_url, "-t", "-A", "-F", "|", "-c", sql],
         capture_output=True, text=True
@@ -48,52 +60,70 @@ def run_query(db_url: str, sql: str) -> list[str]:
     return [line for line in result.stdout.strip().split("\n") if line]
 
 
-def parse_outcome_price(raw):
-    """Same logic as the app's _parse_outcome_price — first value in the list."""
-    if raw is None:
-        return None
-    try:
-        if isinstance(raw, str):
-            raw = json.loads(raw)
-        if isinstance(raw, list) and raw:
-            return float(raw[0])
-    except Exception:
-        pass
-    return None
+def _get_json(url: str):
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        if resp.status != 200:
+            return None
+        return json.loads(resp.read().decode())
 
 
-def gamma_market_status(condition_id: str):
-    """Look up a market's real closed status + price via condition_id."""
-    if not condition_id:
-        return None
-    url = f"{GAMMA_API}/markets?condition_ids={condition_id}"
+def _norm(s: str) -> str:
+    return (s or "").strip().lower()
+
+
+def clob_status(condition_id: str, outcome_name: str):
+    """Primary source. Returns {'closed':bool,'winner':bool or None} or None."""
     try:
-        req = urllib.request.Request(url, headers={
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/124.0.0.0 Safari/537.36",
-        })
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            if resp.status != 200:
-                return None
-            data = json.loads(resp.read().decode())
+        data = _get_json(f"{CLOB_API}/markets/{condition_id}")
+        if not data:
+            return None
+        closed = bool(data.get("closed", False))
+        tokens = data.get("tokens", []) or []
+        winner = None
+        for t in tokens:
+            if _norm(t.get("outcome")) == _norm(outcome_name):
+                winner = bool(t.get("winner", False))
+                break
+        return {"closed": closed, "winner": winner, "matched": winner is not None}
+    except Exception as e:
+        if not _first_error_shown[0]:
+            _first_error_shown[0] = True
+            print(f"\n[!] First CLOB lookup failed — {e}\n"
+                  f"    (further failures silent, will try Gamma fallback)\n")
+        return None
+
+
+def gamma_status(condition_id: str, outcome_name: str):
+    """Fallback source."""
+    try:
+        data = _get_json(f"{GAMMA_API}/markets?condition_ids={condition_id}")
         if not data:
             return None
         m = data[0]
-        return {
-            "closed": bool(m.get("closed", False)),
-            "price": parse_outcome_price(m.get("outcomePrices")),
-        }
-    except (urllib.error.URLError, urllib.error.HTTPError, Exception) as e:
-        if not _first_error_shown[0]:
-            _first_error_shown[0] = True
-            print(f"\n[!] First lookup failed — showing error for diagnosis: {e}\n"
-                  f"    (further failures will be silent, counted as 'Unverifiable')\n")
+        closed = bool(m.get("closed", False))
+        outcomes = m.get("outcomes")
+        prices = m.get("outcomePrices")
+        if isinstance(outcomes, str):
+            outcomes = json.loads(outcomes)
+        if isinstance(prices, str):
+            prices = json.loads(prices)
+        winner = None
+        if outcomes and prices and len(outcomes) == len(prices):
+            for name, price in zip(outcomes, prices):
+                if _norm(name) == _norm(outcome_name):
+                    winner = float(price) >= 0.5
+                    break
+        return {"closed": closed, "winner": winner, "matched": winner is not None}
+    except Exception:
         return None
 
 
-_first_error_shown = [False]
+def check_market(condition_id: str, outcome_name: str):
+    status = clob_status(condition_id, outcome_name)
+    if status is None:
+        status = gamma_status(condition_id, outcome_name)
+    return status
 
 
 def main():
@@ -118,6 +148,7 @@ def main():
 
     false_resolutions = []
     mismatches = []
+    unmatched_name = []
     ok_count = 0
     unverifiable = 0
 
@@ -125,42 +156,39 @@ def main():
         parts = line.split("|")
         if len(parts) < 5:
             continue
-        sig_id, sig_key, outcome, sig_type, title = parts[0], parts[1], parts[2], parts[3], "|".join(parts[4:])
+        sig_id, sig_key, outcome, sig_type = parts[0], parts[1], parts[2], parts[3]
+        title = "|".join(parts[4:])
 
         key_parts = (sig_key or "").split(":")
         condition_id = key_parts[1] if len(key_parts) >= 2 else ""
+        outcome_name = key_parts[2] if len(key_parts) >= 3 else ""
 
-        status = gamma_market_status(condition_id)
+        status = check_market(condition_id, outcome_name)
+
         if status is None:
             unverifiable += 1
-            time.sleep(0.15)
-            continue
-
-        if not status["closed"]:
+        elif not status["closed"]:
             false_resolutions.append((sig_id, title, outcome, sig_type))
+        elif not status["matched"]:
+            unmatched_name.append((sig_id, title, outcome_name))
         else:
-            price = status["price"]
-            if price is None:
-                unverifiable += 1
+            real_outcome = "WON" if status["winner"] else "LOST"
+            if real_outcome != outcome:
+                mismatches.append((sig_id, title, outcome, real_outcome, sig_type))
             else:
-                bullish = sig_type in ("UP", "BUY", "OPEN_POSITION", "LIVE_BUY")
-                real_resolved_yes = price >= 0.5
-                real_outcome = "WON" if (bullish == real_resolved_yes) else "LOST"
-                if real_outcome != outcome:
-                    mismatches.append((sig_id, title, outcome, real_outcome, sig_type))
-                else:
-                    ok_count += 1
+                ok_count += 1
 
-        if i % 25 == 0:
+        if i % 100 == 0:
             print(f"  checked {i}/{len(rows)}...")
-        time.sleep(0.15)
+        time.sleep(0.12)
 
     print("\n" + "=" * 60)
     print("AUDIT RESULTS")
     print("=" * 60)
     print(f"Total checked:        {len(rows)}")
     print(f"Confirmed OK:         {ok_count}")
-    print(f"Unverifiable:         {unverifiable}  (Gamma lookup failed/no data)")
+    print(f"Unverifiable:         {unverifiable}  (no data from CLOB or Gamma)")
+    print(f"Name unmatched:       {len(unmatched_name)}  (market found, couldn't match outcome name)")
     print(f"FALSE RESOLUTIONS:    {len(false_resolutions)}  (market not actually closed)")
     print(f"OUTCOME MISMATCHES:   {len(mismatches)}  (closed, but wrong label)")
 
@@ -177,6 +205,11 @@ def main():
             print(f"  id={sig_id}  [{sig_type}]  recorded={recorded} -> should be {real}  {title}")
         if len(mismatches) > 30:
             print(f"  ... and {len(mismatches) - 30} more")
+
+    if unmatched_name:
+        print("\n--- NAME UNMATCHED (sample, market data format may differ) ---")
+        for sig_id, title, outcome_name in unmatched_name[:10]:
+            print(f"  id={sig_id}  outcome_name='{outcome_name}'  {title}")
 
     if write_fixes_path and (false_resolutions or mismatches):
         with open(write_fixes_path, "w") as f:
