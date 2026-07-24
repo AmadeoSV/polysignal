@@ -23,6 +23,13 @@ if _db_url.startswith("postgres://"):
 DB_PATH = os.path.expanduser("~/polysignal.db")
 DATABASE_URL = _db_url or f"sqlite:///{DB_PATH}"
 
+# Signals detected before this were potentially affected by the LIVE_BUY
+# curPrice bug (price filter checked a stale/arbitrary trade price instead
+# of the most recent one). Fix deployed and confirmed ACTIVE on Railway at
+# 1:48 PM ET on July 24, 2026 -> 17:48 UTC (server stores UTC via
+# datetime.utcnow()). Using 17:50 to give a couple minutes of buffer.
+ACCURACY_FIX_CUTOFF = datetime(2026, 7, 24, 17, 50, 0)
+
 engine = create_engine(
     DATABASE_URL,
     echo=False,
@@ -244,6 +251,16 @@ def db_analytics() -> dict:
         lost = s.query(func.count(Signal.id)).filter(Signal.outcome=="LOST").scalar() or 0
         sig_accuracy = round(won/(won+lost)*100,1) if (won+lost) else None
 
+        # Same, but only on signals detected after the LIVE_BUY price-filter
+        # bug was fixed — gives a clean read separate from the pre-fix mix.
+        won_clean  = s.query(func.count(Signal.id)).filter(
+            Signal.outcome=="WON", Signal.detected_at > ACCURACY_FIX_CUTOFF
+        ).scalar() or 0
+        lost_clean = s.query(func.count(Signal.id)).filter(
+            Signal.outcome=="LOST", Signal.detected_at > ACCURACY_FIX_CUTOFF
+        ).scalar() or 0
+        sig_accuracy_clean = round(won_clean/(won_clean+lost_clean)*100,1) if (won_clean+lost_clean) else None
+
         by_strat = defaultdict(lambda:{"count":0,"pnl":0,"wins":0})
         for t in closed:
             k = t.strategy_tag or "untagged"
@@ -286,6 +303,9 @@ def db_analytics() -> dict:
             "sig_accuracy":   sig_accuracy,
             "sig_won":        won,
             "sig_lost":       lost,
+            "sig_accuracy_clean": sig_accuracy_clean,
+            "sig_won_clean":      won_clean,
+            "sig_lost_clean":     lost_clean,
             "by_strategy":    {k: {**v, "win_rate": round(v["wins"]/v["count"]*100,1)
                                if v["count"] else 0} for k,v in by_strat.items()},
             "by_platform":    dict(by_platform),

@@ -941,12 +941,16 @@ function renderAnalytics() {
   const sigAcc = a.sig_accuracy !== null && a.sig_accuracy !== undefined
     ? `${a.sig_accuracy}% <span style="font-size:11px;color:var(--muted)">(${a.sig_won}W/${a.sig_lost}L)</span>`
     : '<span style="font-size:13px;color:var(--muted)">Pending</span>';
+  const sigAccClean = a.sig_accuracy_clean !== null && a.sig_accuracy_clean !== undefined
+    ? `${a.sig_accuracy_clean}% <span style="font-size:11px;color:var(--muted)">(${a.sig_won_clean}W/${a.sig_lost_clean}L)</span>`
+    : '<span style="font-size:13px;color:var(--muted)">Accumulating\u2026</span>';
   let html=`<div class="agrid">
     <div class="scard"><div class="sv" style="color:var(--amber)">${a.total_signals||0}</div><div class="sl">Total signals</div></div>
     <div class="scard"><div class="sv" style="color:var(--blue)">${a.total_trades||0}</div><div class="sl">Total trades</div></div>
     <div class="scard"><div class="sv" style="color:var(--green)">${a.win_rate||0}%</div><div class="sl">Trade win rate</div></div>
     <div class="scard"><div class="sv" style="color:${pnlC(a.total_pnl)}">${pnlS(a.total_pnl)}</div><div class="sl">Total PnL</div></div>
-    <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--purple);font-size:18px">${sigAcc}</div><div class="sl">🎯 Signal accuracy (auto-tracked)</div></div>
+    <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--purple);font-size:18px">${sigAcc}</div><div class="sl">🎯 Signal accuracy — all-time (auto-tracked)</div></div>
+    <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--green);font-size:18px">${sigAccClean}</div><div class="sl">✅ Signal accuracy — since July 24 filter fix</div></div>
   </div>`;
 
   if(a.by_platform&&Object.keys(a.by_platform).length){
