@@ -252,12 +252,17 @@ def db_analytics() -> dict:
         sig_accuracy = round(won/(won+lost)*100,1) if (won+lost) else None
 
         # Same, but only on signals detected after the LIVE_BUY price-filter
-        # bug was fixed — gives a clean read separate from the pre-fix mix.
+        # bug was fixed, AND explicitly re-checked at <=0.45 here too — not
+        # just trusting the deploy timestamp. This way the stat stays
+        # correct even if some future bug lets a bad-priced signal through
+        # again; it won't silently count it as "clean."
         won_clean  = s.query(func.count(Signal.id)).filter(
-            Signal.outcome=="WON", Signal.detected_at > ACCURACY_FIX_CUTOFF
+            Signal.outcome=="WON", Signal.detected_at > ACCURACY_FIX_CUTOFF,
+            Signal.price_after <= 0.45
         ).scalar() or 0
         lost_clean = s.query(func.count(Signal.id)).filter(
-            Signal.outcome=="LOST", Signal.detected_at > ACCURACY_FIX_CUTOFF
+            Signal.outcome=="LOST", Signal.detected_at > ACCURACY_FIX_CUTOFF,
+            Signal.price_after <= 0.45
         ).scalar() or 0
         sig_accuracy_clean = round(won_clean/(won_clean+lost_clean)*100,1) if (won_clean+lost_clean) else None
 
