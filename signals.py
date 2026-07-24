@@ -136,19 +136,56 @@ def _gamma_event_price(slug: str, market_title: str = "") -> Optional[float]:
         return None
 
 
-def _gamma_market_closed_status(condition_id: str) -> Optional[dict]:
+POLY_CLOB_API = "https://clob.polymarket.com"
+
+
+def _norm_outcome(s: str) -> str:
+    return (s or "").strip().lower()
+
+
+def _clob_market_status(condition_id: str, outcome_name: str) -> Optional[dict]:
     """
-    Look up whether a market has actually closed, via its condition_id
-    (reliably present on every Polymarket signal's platform_signal_id,
-    unlike event slug which is often blank for LIVE_BUY).
+    Primary resolution source. CLOB reliably indexes markets that Gamma's
+    /markets search sometimes doesn't (older/settled sports markets in
+    particular), and returns an explicit per-outcome "winner" flag —
+    which is what actually fixes the mislabeling bug, not just closed
+    status. See _gamma_market_closed_status for why matching the SPECIFIC
+    named outcome (not just "some price >= 0.5") matters.
+    """
+    if not condition_id:
+        return None
+    try:
+        resp = requests.get(f"{POLY_CLOB_API}/markets/{condition_id}", timeout=8)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if not data:
+            return None
+        closed = bool(data.get("closed", False))
+        tokens = data.get("tokens", []) or []
+        winner = None
+        for t in tokens:
+            if _norm_outcome(t.get("outcome")) == _norm_outcome(outcome_name):
+                winner = bool(t.get("winner", False))
+                break
+        return {"closed": closed, "winner": winner, "matched": winner is not None}
+    except Exception:
+        return None
 
-    Returns {"closed": bool, "price": float or None} or None on failure.
 
-    This exists because price alone (e.g. price >= 0.95) was previously
-    used as a proxy for "market resolved" — which is wrong. A live,
-    volatile market (a close tennis match, a tight game) can legitimately
-    spike to 99c on a single dramatic moment without actually being over.
-    Only a market's own "closed" flag means the outcome is final.
+def _gamma_market_closed_status(condition_id: str, outcome_name: str = "") -> Optional[dict]:
+    """
+    Fallback resolution source (used only if CLOB has no data).
+
+    Originally this returned a single generic price and compared it
+    against a flat 0.5/0.95 threshold — which is wrong for any market
+    with more than a trivial binary "the only outcome that matters is
+    index 0" shape. A signal betting on the SECOND outcome of a two-way
+    market (e.g. "Under" instead of "Over", a specific named candidate)
+    would get checked against the wrong side's price entirely, silently
+    flipping WON and LOST. An audit of historical signals confirmed this
+    was happening on ~53% of resolved Polymarket signals. Now matches
+    by the specific outcome name, same as the CLOB path above.
     """
     if not condition_id:
         return None
@@ -161,12 +198,32 @@ def _gamma_market_closed_status(condition_id: str) -> Optional[dict]:
         if not data:
             return None
         m = data[0]
-        return {
-            "closed": bool(m.get("closed", False)),
-            "price":  _parse_outcome_price(m.get("outcomePrices")),
-        }
+        closed = bool(m.get("closed", False))
+        outcomes = m.get("outcomes")
+        prices = m.get("outcomePrices")
+        if isinstance(outcomes, str):
+            import json as _json
+            outcomes = _json.loads(outcomes)
+        if isinstance(prices, str):
+            import json as _json
+            prices = _json.loads(prices)
+        winner = None
+        if outcomes and prices and len(outcomes) == len(prices):
+            for name, price in zip(outcomes, prices):
+                if _norm_outcome(name) == _norm_outcome(outcome_name):
+                    winner = float(price) >= 0.5
+                    break
+        return {"closed": closed, "winner": winner, "matched": winner is not None}
     except Exception:
         return None
+
+
+def _polymarket_resolution(condition_id: str, outcome_name: str) -> Optional[dict]:
+    """Try CLOB first (more reliable coverage), fall back to Gamma."""
+    status = _clob_market_status(condition_id, outcome_name)
+    if status is None:
+        status = _gamma_market_closed_status(condition_id, outcome_name)
+    return status
 
 
 def _gamma_market_price(slug: str) -> Optional[float]:
@@ -434,18 +491,38 @@ def check_signal_outcomes():
                 # "P:{conditionId}:{outcome}:LIVE_BUY"
                 parts = (sig_key or "").split(":")
                 condition_id = parts[1] if len(parts) >= 2 else ""
-                status = _gamma_market_closed_status(condition_id)
+                outcome_name = parts[2] if len(parts) >= 3 else ""
+                status = _polymarket_resolution(condition_id, outcome_name)
                 if status is None or not status["closed"]:
                     # Not actually closed yet — genuinely still pending,
                     # regardless of what the live price happens to be
                     # doing right now.
                     time.sleep(0.2)
                     continue
-                cur_price = status["price"]
-                if cur_price is None:
+                if not status["matched"]:
+                    # Market's closed but we couldn't match the recorded
+                    # outcome name against it (rare — naming/encoding
+                    # mismatch). Leave pending rather than guess.
                     time.sleep(0.2)
                     continue
-                resolved_yes = cur_price >= 0.5
+                # status["winner"] already tells us directly whether THIS
+                # specific outcome won — no generic threshold, no
+                # bullish/direction comparison needed for Polymarket.
+                outcome = "WON" if status["winner"] else "LOST"
+                with Session(engine) as s:
+                    row = s.get(Signal, sig_id)
+                    if row:
+                        row.outcome = outcome
+                        s.commit()
+                        resolved += 1
+                        tg_send(format_resolution_msg(
+                            title=title or ticker or "market",
+                            outcome=outcome,
+                            sig_type=sig_type,
+                            cur_price=(1.0 if status["winner"] else 0.0),
+                        ))
+                time.sleep(0.3)
+                continue
 
             bullish = sig_type in ("UP", "BUY", "OPEN_POSITION", "LIVE_BUY")
             outcome = "WON" if (bullish == resolved_yes) else "LOST"
