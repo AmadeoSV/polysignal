@@ -179,10 +179,13 @@ def build_signals(raw, meta, kind, cfg, top_count) -> List[dict]:
         if dom["traders"]  < cfg["poly_min_traders"]: continue
         if dom["rawValue"] < cfg["poly_min_total"]:   continue
         if dominance       < cfg["poly_dominance"]:   continue
+        # Price ceiling applies to both kinds — LIVE_BUY was never being
+        # filtered here before, so poly_max_price silently had zero effect
+        # on it despite being the larger, better-performing signal group.
+        if cur > cfg["poly_max_price"]: continue
+        if cur <= 0:                    continue
         if kind == "OPEN_POSITION":
             if momentum < cfg["poly_min_momentum"]: continue
-            if cur > cfg["poly_max_price"]:         continue
-            if cur <= 0:                            continue
 
         opp = [e for o,s in side_stats.items() if o!=dom_out for e in s["entries"]]
         results.append(summarize(kind,(cid,dom_out),m,dom["entries"],opp,
