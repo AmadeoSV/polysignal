@@ -441,6 +441,28 @@ class TraderPriceHistory(Base):
     continued_1h    = Column(Boolean, nullable=True)
     continued_24h   = Column(Boolean, nullable=True)
 
+
+class PaperTrade(Base):
+    """
+    Hypothetical, no-money position logged automatically for every PRIME
+    signal (fresh, <=35c) that actually gets alerted. Fixed $5 stake per
+    trade. Lets the corrected system build a real forward track record
+    while a live capital decision waits on the person's own timeline —
+    separate from, and not blocking, further data collection.
+    """
+    __tablename__ = "paper_trades"
+    id                  = Column(Integer, primary_key=True)
+    signal_id           = Column(Integer, index=True)
+    platform_signal_id  = Column(String, index=True)
+    market_title        = Column(Text)
+    entry_price         = Column(Float)
+    stake               = Column(Float, default=5.0)
+    shares              = Column(Float)
+    detected_at         = Column(DateTime, default=datetime.utcnow)
+    outcome             = Column(String, nullable=True)  # WON / LOST / None (pending)
+    pnl                 = Column(Float, nullable=True)
+    resolved_at         = Column(DateTime, nullable=True)
+
 Base.metadata.create_all(engine)
 
 # ── Migrations — add new columns to existing tables ───────────────────────────
@@ -480,6 +502,63 @@ def db_init_signal_price_history(signal_id: int, ticker: str, platform: str,
             signal_time=signal_time, price_at_signal=price,
         ))
         s.commit()
+
+
+def db_log_paper_trade(signal_id: int, platform_signal_id: str, title: str,
+                        entry_price: float, stake: float = 5.0):
+    """Log a hypothetical PRIME-tier position. No real money involved."""
+    if not entry_price or entry_price <= 0:
+        return
+    with Session(engine) as s:
+        existing = s.query(PaperTrade).filter_by(signal_id=signal_id).first()
+        if existing:
+            return
+        s.add(PaperTrade(
+            signal_id=signal_id, platform_signal_id=platform_signal_id,
+            market_title=title, entry_price=entry_price, stake=stake,
+            shares=stake / entry_price,
+        ))
+        s.commit()
+
+
+def db_resolve_paper_trades():
+    """
+    Resolve any pending paper trades whose underlying signal now has a
+    real, corrected outcome (via the fixed check_signal_outcomes()).
+    Called after each outcome check pass — cheap, just a join.
+    """
+    with Session(engine) as s:
+        pending = (
+            s.query(PaperTrade, Signal.outcome)
+            .join(Signal, Signal.id == PaperTrade.signal_id)
+            .filter(PaperTrade.outcome == None, Signal.outcome != None)
+            .all()
+        )
+        for pt, sig_outcome in pending:
+            pt.outcome = sig_outcome
+            pt.pnl = (pt.shares - pt.stake) if sig_outcome == "WON" else -pt.stake
+            pt.resolved_at = datetime.utcnow()
+        if pending:
+            s.commit()
+        return len(pending)
+
+
+def db_paper_trade_stats() -> dict:
+    """Summary stats for the paper trading dashboard card."""
+    with Session(engine) as s:
+        resolved = s.query(PaperTrade).filter(PaperTrade.outcome != None).all()
+        pending  = s.query(func.count(PaperTrade.id)).filter(PaperTrade.outcome == None).scalar() or 0
+        won      = [t for t in resolved if t.outcome == "WON"]
+        total_pnl = sum(t.pnl or 0 for t in resolved)
+        return {
+            "resolved":   len(resolved),
+            "pending":    pending,
+            "won":        len(won),
+            "lost":       len(resolved) - len(won),
+            "win_rate":   round(len(won) / len(resolved) * 100, 1) if resolved else None,
+            "total_pnl":  round(total_pnl, 2),
+            "total_staked": round(sum(t.stake for t in resolved), 2),
+        }
 
 
 def db_init_trader_entry(condition_id: str, outcome: str, title: str,

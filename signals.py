@@ -312,6 +312,21 @@ def check_new_signals(rows: List[dict], platform: str):
             db_mark_alert_sent(key)
             with _seen_lock:
                 _seen_signals.add(key)
+
+            # Every alert that actually goes out from here forward is a
+            # PRIME signal (the gate above already filtered). Log it as
+            # a hypothetical $5 position, no real money, so there's a
+            # live forward track record building while any real capital
+            # decision waits on its own timeline.
+            if platform != "kalshi" and r.get("db_id"):
+                try:
+                    from database import db_log_paper_trade
+                    db_log_paper_trade(
+                        r["db_id"], key, r.get("title", ""),
+                        r.get("curPrice", 0)
+                    )
+                except Exception as e:
+                    print(f"  Paper trade log failed for {key[:50]}: {e}")
         except Exception as e:
             print(f"  Alert failed for {key[:50]}: {e}")
 

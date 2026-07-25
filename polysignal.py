@@ -380,6 +380,12 @@ def api_close_trade(tid):
 def api_analytics():
     return jsonify(db_analytics())
 
+@app.route("/api/paper_trades")
+@requires_auth
+def api_paper_trades():
+    from database import db_paper_trade_stats
+    return jsonify(db_paper_trade_stats())
+
 @app.route("/api/scan_now", methods=["POST"])
 @requires_auth
 def api_scan_now():
@@ -619,7 +625,7 @@ tr:hover td{background:var(--surf)}
 <script>
 let tab='home', liveFilter='all', polyTab='positions';
 let state={kalshi_signals:[],poly_positions:[],poly_live:[],config:{},events:[],db_size_mb:0};
-let sigs_db=[], trades_db=[], analytics={};
+let sigs_db=[], trades_db=[], analytics={}, paperTrades={};
 let calY=new Date().getFullYear(), calM=new Date().getMonth(), selDay=null;
 let charts={};
 
@@ -951,6 +957,12 @@ function renderAnalytics() {
     <div class="scard"><div class="sv" style="color:${pnlC(a.total_pnl)}">${pnlS(a.total_pnl)}</div><div class="sl">Total PnL</div></div>
     <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--purple);font-size:18px">${sigAcc}</div><div class="sl">🎯 Signal accuracy — all-time (auto-tracked)</div></div>
     <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--green);font-size:18px">${sigAccClean}</div><div class="sl">✅ Signal accuracy — since July 24 filter fix</div></div>
+    <div class="scard" style="grid-column:span 4">
+      <div class="sv" style="color:var(--amber);font-size:16px">
+        ${paperTrades.resolved ? `${paperTrades.win_rate}% (${paperTrades.won}W/${paperTrades.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(paperTrades.total_pnl)}">${pnlS(paperTrades.total_pnl)}</span> on $${paperTrades.total_staked} staked &nbsp; | &nbsp; ${paperTrades.pending||0} pending` : `Accumulating\u2026 (${paperTrades.pending||0} pending)`}
+      </div>
+      <div class="sl">\u{1f4c4} PRIME paper trades — $5/signal, no real money (started July 24)</div>
+    </div>
   </div>`;
 
   if(a.by_platform&&Object.keys(a.by_platform).length){
@@ -1056,7 +1068,8 @@ async function submitClose(){
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
 async function fetchTrades(){try{const r=await fetch('/api/trades');trades_db=await r.json();render();}catch(e){}}
-async function fetchAnalytics(){try{const r=await fetch('/api/analytics');analytics=await r.json();render();}catch(e){}}
+async function fetchAnalytics(){try{const r=await fetch('/api/analytics');analytics=await r.json();await fetchPaperTrades();render();}catch(e){}}
+async function fetchPaperTrades(){try{const r=await fetch('/api/paper_trades');paperTrades=await r.json();}catch(e){}}
 
 // ── Calendar ──────────────────────────────────────────────────────────────────
 function calNav(d){calM+=d;if(calM>11){calM=0;calY++;}if(calM<0){calM=11;calY--;}renderCal();}

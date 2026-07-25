@@ -199,6 +199,13 @@ def run_kalshi_scan():
         print(f"Kalshi done — {len(new_sigs)} signals.")
         update_open_trade_prices()
         check_signal_outcomes()
+        try:
+            from database import db_resolve_paper_trades
+            n = db_resolve_paper_trades()
+            if n:
+                print(f"  {n} paper trades resolved.")
+        except Exception as e:
+            print(f"  Paper trade resolution error: {e}")
         db_cleanup()
         send_morning_brief(_st)
     except Exception as e:
