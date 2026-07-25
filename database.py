@@ -30,6 +30,15 @@ DATABASE_URL = _db_url or f"sqlite:///{DB_PATH}"
 # datetime.utcnow()). Using 17:50 to give a couple minutes of buffer.
 ACCURACY_FIX_CUTOFF = datetime(2026, 7, 24, 17, 50, 0)
 
+# Keep this in sync with worker.py's poly_max_price config value. Was 0.45
+# when this stat was first built; poly_max_price was tightened to 0.35
+# later the same day based on the corrected edge analysis, and this
+# constant went stale until caught and fixed here. If poly_max_price
+# changes again, update this too — the "since fix" stat should always
+# reflect what the live filter actually allows through, not a historical
+# snapshot of it.
+ACCURACY_PRICE_CAP = 0.35
+
 engine = create_engine(
     DATABASE_URL,
     echo=False,
@@ -258,11 +267,11 @@ def db_analytics() -> dict:
         # again; it won't silently count it as "clean."
         won_clean  = s.query(func.count(Signal.id)).filter(
             Signal.outcome=="WON", Signal.detected_at > ACCURACY_FIX_CUTOFF,
-            Signal.price_after <= 0.45
+            Signal.price_after <= ACCURACY_PRICE_CAP
         ).scalar() or 0
         lost_clean = s.query(func.count(Signal.id)).filter(
             Signal.outcome=="LOST", Signal.detected_at > ACCURACY_FIX_CUTOFF,
-            Signal.price_after <= 0.45
+            Signal.price_after <= ACCURACY_PRICE_CAP
         ).scalar() or 0
         sig_accuracy_clean = round(won_clean/(won_clean+lost_clean)*100,1) if (won_clean+lost_clean) else None
 
