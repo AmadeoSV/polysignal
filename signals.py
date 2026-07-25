@@ -553,12 +553,23 @@ def check_signal_outcomes():
                         row.outcome = outcome
                         s.commit()
                         resolved += 1
-                        tg_send(format_resolution_msg(
-                            title=title or ticker or "market",
-                            outcome=outcome,
-                            sig_type=sig_type,
-                            cur_price=(1.0 if status["winner"] else 0.0),
-                        ))
+                        # Only notify if this signal was actually alerted
+                        # in the first place (PRIME, has a linked paper
+                        # trade). Otherwise you'd get a "resolved" ping
+                        # for a signal you were never told existed —
+                        # confusing, and it happened before this fix.
+                        from database import PaperTrade
+                        with Session(engine) as s2:
+                            was_alerted = s2.query(PaperTrade).filter_by(
+                                signal_id=sig_id
+                            ).first() is not None
+                        if was_alerted:
+                            tg_send(format_resolution_msg(
+                                title=title or ticker or "market",
+                                outcome=outcome,
+                                sig_type=sig_type,
+                                cur_price=(1.0 if status["winner"] else 0.0),
+                            ))
                 time.sleep(0.3)
                 continue
 
