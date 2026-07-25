@@ -163,15 +163,13 @@ def format_poly_alert(r: dict) -> str:
     elif dom>=70: cons="strong"
     else:         cons="moderate"
 
-    # Tonight's finding: within the already-profitable <=45c zone, signals
-    # caught before much price movement (fresh) show meaningfully better
-    # edge (+19.5c) than ones caught after price already moved (+10.8c).
-    # Both are still validated/profitable — this is a tier, not a filter.
-    is_fresh = abs(mom) < 2.0
-    if is_fresh:
-        tier_line = "\U0001f3af <b>PRIME SETUP</b> \u2014 fresh entry, strongest edge tier"
-    else:
-        tier_line = "\U0001f4b5 <b>STANDARD SETUP</b> \u2014 price already moved, edge still positive but weaker"
+    # Only PRIME (fresh, <2c moved, <=35c) signals reach this function now
+    # — check_new_signals() filters everything else out before sending.
+    # Re-checked on corrected data after the outcome-audit fix: fresh
+    # signals show +16.1c edge (417 distinct markets), moved ones show
+    # -2.1c (essentially no edge) — so STANDARD stopped being worth
+    # alerting on and was cut rather than mislabeled as "weaker but fine."
+    tier_line = "\U0001f3af <b>PRIME SETUP</b> \u2014 fresh entry, confirmed edge tier"
 
     if is_live:
         header = "\u26a1 POLYMARKET \u2014 LIVE BUY CLUSTER"

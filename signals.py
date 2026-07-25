@@ -277,6 +277,29 @@ def check_new_signals(rows: List[dict], platform: str):
         key = r.get("sig_key", "")
         if not key or key in already_alerted:
             continue
+
+        # Only PRIME (fresh, <2c moved) signals get sent to Telegram now.
+        # After the outcome-audit fix and tightening to <=35c, re-running
+        # the freshness split on corrected data showed STANDARD (2c+
+        # moved) no longer has a real edge (-2.1c, essentially a coin
+        # flip) — only PRIME does (+16.1c, confirmed on 417 distinct
+        # markets). Still mark non-fresh signals as alerted so they're
+        # not re-evaluated every scan, just don't notify on them.
+        if platform != "kalshi":
+            momentum = r.get("momentum")
+            if momentum is None:
+                momentum = r.get("curPrice", 0) - r.get("avgEntry", 0)
+            is_fresh = abs(momentum) < 0.02
+            if not is_fresh:
+                try:
+                    from database import db_mark_alert_sent
+                    db_mark_alert_sent(key)
+                except Exception:
+                    pass
+                with _seen_lock:
+                    _seen_signals.add(key)
+                continue
+
         url = r.get("url") or r.get("market_url", "")
         try:
             if platform == "kalshi":
