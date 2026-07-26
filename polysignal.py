@@ -1138,11 +1138,14 @@ function updateUI(){
 
   // header stats
   const a=analytics;
+  const ptHeader = paperTrades.resolved
+    ? `${paperTrades.win_rate}% <span style="font-size:11px;opacity:.7">(${paperTrades.won}W/${paperTrades.lost}L)</span>`
+    : `<span style="font-size:12px;opacity:.7">accumulating\u2026</span>`;
   document.getElementById('hstats').innerHTML=
     `<div class="hstat">Kalshi: <b>${state.last_kalshi?state.last_kalshi.split(' ')[1]:'—'}</b></div>
      <div class="hstat">Poly: <b>${state.last_poly_pos?state.last_poly_pos.split(' ')[1]:'—'}</b></div>
-     <div class="hstat">Win rate: <b style="color:var(--green)">${a.win_rate||0}%</b></div>
-     <div class="hstat">PnL: <b style="color:${pnlC(a.total_pnl)}">${pnlS(a.total_pnl)}</b></div>`;
+     <div class="hstat" title="PRIME paper trades, no real money">PRIME win rate: <b style="color:var(--green)">${ptHeader}</b></div>
+     <div class="hstat" title="PRIME paper trades, no real money">Paper PnL: <b style="color:${pnlC(paperTrades.total_pnl||0)}">${paperTrades.resolved?pnlS(paperTrades.total_pnl):'$0.00'}</b></div>`;
 
   if(state.config){
     document.getElementById('k-move').value=Math.round((state.config.kalshi_min_move||0.03)*100);
