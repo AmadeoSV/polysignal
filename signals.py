@@ -381,7 +381,7 @@ def fetch_fred_events() -> List[dict]:
 
 
 def send_morning_brief(state_ref: dict):
-    from database import db_analytics, db_get_signals
+    from database import db_get_signals
     now_utc = datetime.now(timezone.utc)
     if now_utc.hour not in (12, 13):
         return
@@ -398,20 +398,32 @@ def send_morning_brief(state_ref: dict):
         print(f"Morning brief flag write failed: {e}")
 
     try:
-        a      = db_analytics()
         sigs   = db_get_signals(limit=200)
         active = [s for s in sigs if s.get("outcome") is None]
         k_sigs = [s for s in active if s["platform"] == "kalshi"]
         p_sigs = [s for s in active if s["platform"] == "polymarket"]
 
+        from database import db_paper_trade_stats
+        pt = db_paper_trade_stats()
+
         top_poly = state_ref.get("poly_positions", [])[:4]
         top_k    = state_ref.get("kalshi_signals", [])[:3]
+
+        if pt.get("resolved"):
+            pt_line = (f"PRIME paper trades: <b>{pt['win_rate']}%</b> "
+                       f"({pt['won']}W/{pt['lost']}L) | "
+                       f"PnL: <b>${pt['total_pnl']:+.2f}</b>"
+                       + (f" | {pt['pending']} pending" if pt.get("pending") else ""))
+        else:
+            pending = pt.get("pending", 0)
+            pt_line = (f"PRIME paper trades: accumulating\u2026"
+                       + (f" ({pending} pending)" if pending else ""))
 
         lines = [
             "\u2600\ufe0f <b>PolySignal Morning Brief</b>",
             "\u2501" * 20,
             f"Signals active: <b>{len(active)}</b> ({len(k_sigs)} Kalshi, {len(p_sigs)} Polymarket)",
-            f"Open trades: <b>{a['open_trades']}</b> | PnL: <b>${a['total_pnl']:+.2f}</b>",
+            pt_line,
             "",
         ]
         if top_poly:
