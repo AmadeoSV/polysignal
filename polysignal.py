@@ -1000,13 +1000,13 @@ function initCharts() {
     plugins:{legend:{display:false}},
     scales:{x:{ticks:{color:'#7a7a8a',font:{size:10}}},y:{ticks:{color:'#7a7a8a',font:{size:10}}}}};
   const pnlEl=document.getElementById('pnl-chart');
-  if(pnlEl&&a.pnl_series&&a.pnl_series.length){
+  if(pnlEl&&paperTrades.pnl_series&&paperTrades.pnl_series.length){
     if(charts.pnl) charts.pnl.destroy();
     charts.pnl=new Chart(pnlEl,{type:'line',data:{
-      labels:a.pnl_series.map(p=>p.date),
-      datasets:[{data:a.pnl_series.map(p=>p.pnl),borderColor:'#22c55e',
+      labels:paperTrades.pnl_series.map(p=>p.date),
+      datasets:[{data:paperTrades.pnl_series.map(p=>p.pnl),borderColor:'#22c55e',
         backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:.4,pointRadius:2}]
-    },options:{...opts,plugins:{...opts.plugins,title:{display:true,text:'Cumulative PnL ($)',color:'#7a7a8a',font:{size:12}}}}});
+    },options:{...opts,plugins:{...opts.plugins,title:{display:true,text:'PRIME Paper Trading — Cumulative PnL ($)',color:'#7a7a8a',font:{size:12}}}}});
   }
   const sigEl=document.getElementById('sig-chart');
   if(sigEl&&a.signals_by_day&&a.signals_by_day.length){

@@ -559,6 +559,19 @@ def db_paper_trade_stats() -> dict:
         pending  = s.query(func.count(PaperTrade.id)).filter(PaperTrade.outcome == None).scalar() or 0
         won      = [t for t in resolved if t.outcome == "WON"]
         total_pnl = sum(t.pnl or 0 for t in resolved)
+
+        # Cumulative PnL over time, ordered by resolution — mirrors the
+        # manual-trade pnl_series pattern, but for what's actually being
+        # tracked day to day now.
+        ordered = sorted(resolved, key=lambda t: t.resolved_at or datetime.min)
+        cum, pnl_series = 0, []
+        for t in ordered:
+            cum += t.pnl or 0
+            pnl_series.append({
+                "date": t.resolved_at.strftime("%m/%d") if t.resolved_at else "",
+                "pnl":  round(cum, 2),
+            })
+
         return {
             "resolved":   len(resolved),
             "pending":    pending,
@@ -567,6 +580,7 @@ def db_paper_trade_stats() -> dict:
             "win_rate":   round(len(won) / len(resolved) * 100, 1) if resolved else None,
             "total_pnl":  round(total_pnl, 2),
             "total_staked": round(sum(t.stake for t in resolved), 2),
+            "pnl_series": pnl_series,
         }
 
 
