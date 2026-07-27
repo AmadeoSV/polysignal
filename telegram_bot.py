@@ -152,7 +152,6 @@ def format_poly_alert(r: dict) -> str:
     upside    = round(r.get("upside",0)*100,1)
     mom       = (r.get("curPrice",0) - r.get("avgEntry",0))*100
     outcome   = r.get("outcome","")
-    strength  = r.get("strength",1)
     end_date  = r.get("endDate","") or r.get("end_date","")
     hor       = _horizon_label(end_date)
     hor_t     = _time_horizon(end_date)
@@ -174,13 +173,18 @@ def format_poly_alert(r: dict) -> str:
     if is_live:
         header = "\u26a1 POLYMARKET \u2014 LIVE BUY CLUSTER"
         sub    = f"Top traders just bought <b>{outcome}</b> in the last 30 min"
+        # This signal is, by definition, on a match currently being played
+        # (LIVE BUY CLUSTER = top traders bought in the last 30 min of live
+        # trading). end_date reflects the underlying market's official
+        # close date, which can be days out even though the actual match
+        # may resolve within the hour — showing "LONG-TERM, X days left"
+        # here was actively misleading, not just imprecise.
+        timing = "\U0001f534 <b>LIVE</b> \u2014 match in progress, may resolve soon"
     else:
         header = "\U0001f4ca POLYMARKET \u2014 SMART MONEY POSITION"
         sub    = f"Top traders are holding <b>{outcome}</b>"
-
-    stars    = "\u25cf"*strength + "\u25cb"*(5-strength)
-    timing   = ("\u26a1 <b>SHORT-TERM</b> \u2014 resolves soon, act quickly" if hor_t=="short"
-                else "\U0001f4c5 <b>LONG-TERM</b> \u2014 more time to enter")
+        timing = ("\u26a1 <b>SHORT-TERM</b> \u2014 resolves soon, act quickly" if hor_t=="short"
+                  else "\U0001f4c5 <b>LONG-TERM</b> \u2014 more time to enter")
     mom_str  = f"+{mom:.1f}\u00a2" if mom >= 0 else f"{mom:.1f}\u00a2"
     mom_icon = "\U0001f4c8" if mom >= 0 else "\U0001f4c9"
     mom_line = f"{mom_icon} <b>{mom_str}</b> since smart money entered"
@@ -192,13 +196,20 @@ def format_poly_alert(r: dict) -> str:
         "\u2501"*20,
         f"<b>{r.get('title','')}</b>",
         sub, "",
-        f"\U0001f465 <b>{traders} top traders</b> | {cons} consensus ({dom}%)",
-        f"Signal strength: {stars}", "",
+        # Trader count + consensus % is the real, informative number.
+        # Previously also showed a 5-dot "strength" meter derived from
+        # trader count alone (capped low whenever traders == the minimum
+        # filter, i.e. almost always) — it could show 2/5 dots right next
+        # to "very strong consensus (100%)," directly contradicting it.
+        # Dropped rather than fixed, since we already found trader count
+        # doesn't predict edge on its own; dominance % is the one that
+        # matters and it's already shown here.
+        f"\U0001f465 <b>{traders} top traders</b> | {cons} consensus ({dom}%)", "",
         f"\U0001f4b5 Avg entry: <b>{avg_entry}\u00a2</b> \u2192 Now: <b>{cur_price}\u00a2</b> ({mom_line})",
         f"\U0001f3af Upside remaining to 100\u00a2: <b>{upside}\u00a2</b>",
         "", timing,
     ]
-    if hor:
+    if hor and not is_live:
         lines.append(f"\u23f0 {hor}")
     if opp_pct > 20:
         lines.append(f"\n\u26a0\ufe0f {r.get('oppositeTraders',0)} top traders on the opposite side ({opp_pct}% of value)")
