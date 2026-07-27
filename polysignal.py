@@ -861,8 +861,6 @@ function renderPolyCard(r,compact=false) {
     ? `<div style="font-size:11px;color:var(--amber);padding:4px 8px;background:var(--surf);border-radius:4px;margin-bottom:6px">⚠️ ${r.oppositeTraders} traders on opposite side (${opp_pct}% of value)</div>`
     : '';
 
-  const strengthBar = '●'.repeat(r.strength||1)+'○'.repeat(5-(r.strength||1));
-
   const act = getAction(r, 'polymarket');
   return `<div class="card poly">
     <div class="card-head">
@@ -883,7 +881,7 @@ function renderPolyCard(r,compact=false) {
     </div>
 
     <div class="dom-row">
-      <span style="font-size:12px"><b>${r.traders}</b> top traders agree · strength ${strengthBar}</span>
+      <span style="font-size:12px"><b>${r.traders}</b> top traders agree</span>
       <span style="color:${dcolor};font-weight:700">${dom}% consensus</span>
     </div>
     <div class="dom-track"><div class="dom-fill" style="width:${dom}%;background:${dcolor}"></div></div>
@@ -894,7 +892,9 @@ function renderPolyCard(r,compact=false) {
       <div class="stat"><div class="sv2" style="color:var(--blue)">${usd(r.totalValue)}</div><div class="sl2">Smart $ in</div></div>
       <div class="stat"><div class="sv2" style="color:${mom>0?'var(--green)':'var(--amber)'}">+${mom_c}¢</div><div class="sl2">Momentum</div></div>
     </div>
-    ${hor.label?`<div style="font-size:11px;color:${hor.color};padding:4px 8px;background:var(--surf);border-radius:4px;margin-bottom:6px">${hor.label} · ${hor.type==='short'?'<b>Short-term</b>':'<b>Long-term</b>'}</div>`:''}
+    ${live
+      ? `<div style="font-size:11px;color:var(--red);padding:4px 8px;background:var(--surf);border-radius:4px;margin-bottom:6px">🔴 <b>LIVE</b> — match in progress, may resolve soon</div>`
+      : (hor.label?`<div style="font-size:11px;color:${hor.color};padding:4px 8px;background:var(--surf);border-radius:4px;margin-bottom:6px">${hor.label} · ${hor.type==='short'?'<b>Short-term</b>':'<b>Long-term</b>'}</div>`:'')}
     <div class="foot">
       ${url?`<a href="${url}" target="_blank" style="font-size:12px">View on Polymarket ↗</a>`:'<span></span>'}
       <button class="hbtn pri" style="font-size:11px;padding:3px 9px" onclick="openLog('${dbid}','${r.conditionId}','${(r.title||'').replace(/'/g,"\'")}',${r.curPrice||r.cur_price||0},'polymarket',1)">+ Trade</button>
