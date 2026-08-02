@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from kalshi import is_live_sports_ticker
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN","")
 TG_CHAT  = os.environ.get("TELEGRAM_CHAT_ID","")
 _tg_offset = 0
@@ -102,6 +103,7 @@ def format_kalshi_alert(s: dict) -> str:
     hor    = _horizon_label(s.get("end_date",""))
     hor_t  = _time_horizon(s.get("end_date",""))
     what   = "Someone bought YES aggressively" if up else "Someone sold YES aggressively"
+    is_live = is_live_sports_ticker(s.get("ticker",""))
     lines  = [
         f"{icon} <b>KALSHI \u2014 {action}</b>",
         "\u2501"*20,
@@ -112,7 +114,9 @@ def format_kalshi_alert(s: dict) -> str:
         f"\U0001f3af Upside to YES: <b>{upside}\u00a2</b>",
         f"\U0001f9e0 {what}",
     ]
-    if hor:
+    if is_live:
+        lines.append(f"\U0001f534 <b>LIVE</b> \u2014 game in progress, may resolve soon")
+    elif hor:
         lines.append(f"\u23f0 {hor} \u2014 {'Resolves soon' if hor_t=='short' else 'Long-term play'}")
     lines.append(f"\n<a href=\"{s['url']}\">View on Kalshi \u2197</a>")
     return "\n".join(lines)
@@ -125,6 +129,7 @@ def format_cluster_alert(c: dict) -> str:
     hor   = _horizon_label(c.get("end_date",""))
     hor_t = _time_horizon(c.get("end_date",""))
     action = "buying YES" if up else "selling YES"
+    is_live = is_live_sports_ticker(c.get("ticker",""))
     lines = [
         f"{icon} <b>KALSHI \u2014 REPEATED {'BUY' if up else 'SELL'} CLUSTER</b>",
         "\u2501"*20,
@@ -137,7 +142,9 @@ def format_cluster_alert(c: dict) -> str:
         f"\U0001f9e0 <b>Stronger than a single order</b> \u2014 multiple actors independently agree.",
         f"   Consider: {'entering YES if conviction is high' if up else 'avoiding YES or entering NO'}",
     ]
-    if hor:
+    if is_live:
+        lines.append(f"\U0001f534 <b>LIVE</b> \u2014 game in progress, may resolve soon")
+    elif hor:
         lines.append(f"\u23f0 {hor} \u2014 {'Resolves soon' if hor_t=='short' else 'Long-term play'}")
     lines.append(f"\n<a href=\"{c['url']}\">View on Kalshi \u2197</a>")
     return "\n".join(lines)

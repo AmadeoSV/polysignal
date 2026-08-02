@@ -27,6 +27,22 @@ WATCHED_SERIES = [
     "KXNFLGAME","KXMLBGAME","KXATPGAME","KXWTPGAME",
 ]
 
+# Subset of WATCHED_SERIES that are live, in-progress sports games —
+# same category of market that caused the Polymarket "days left /
+# long-term play" bug (a live event can spike near resolution well
+# before it's actually over, and days-left framing pulled from the
+# market's admin close date doesn't reflect that). Used so Telegram
+# alerts on these show a "LIVE" indicator instead, matching the fix
+# already made on the Polymarket side.
+LIVE_SPORTS_SERIES = (
+    "KXNBAGAME", "KXNBAFINALS", "KXNHLGAME", "KXNHLSTANCUP",
+    "KXNFLGAME", "KXMLBGAME", "KXATPGAME", "KXWTPGAME",
+)
+
+def is_live_sports_ticker(ticker: str) -> bool:
+    return any(ticker.startswith(series) for series in LIVE_SPORTS_SERIES)
+
+
 # Capture floor — the bar for saving a price move to the DB at all.
 # Deliberately much lower than any alert threshold: the goal right now is
 # broad data collection to empirically find where real signal lives, the

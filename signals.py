@@ -403,8 +403,9 @@ def send_morning_brief(state_ref: dict):
         k_sigs = [s for s in active if s["platform"] == "kalshi"]
         p_sigs = [s for s in active if s["platform"] == "polymarket"]
 
-        from database import db_paper_trade_stats
+        from database import db_paper_trade_stats, db_analytics
         pt = db_paper_trade_stats()
+        a  = db_analytics()
 
         top_poly = state_ref.get("poly_positions", [])[:4]
         top_k    = state_ref.get("kalshi_signals", [])[:3]
@@ -419,11 +420,26 @@ def send_morning_brief(state_ref: dict):
             pt_line = (f"PRIME paper trades: accumulating\u2026"
                        + (f" ({pending} pending)" if pending else ""))
 
+        # Kalshi's own line, computed fresh from the DB rather than from
+        # whatever happens to be sitting in in-memory state at 8am — Kalshi
+        # signals are sparse enough that the old snapshot-based "Recent
+        # Kalshi signals" section below often had nothing to show even on
+        # days with real activity.
+        kalshi_won  = a.get("sig_won_clean_kalshi") or 0
+        kalshi_lost = a.get("sig_lost_clean_kalshi") or 0
+        kalshi_acc  = a.get("sig_accuracy_clean_kalshi")
+        if kalshi_acc is not None:
+            kalshi_line = (f"\u26a1 Kalshi: <b>{kalshi_won+kalshi_lost}</b> resolved | "
+                           f"Accuracy: <b>{kalshi_acc}%</b> ({kalshi_won}W/{kalshi_lost}L)")
+        else:
+            kalshi_line = "\u26a1 Kalshi: accumulating\u2026 (nothing resolved yet)"
+
         lines = [
             "\u2600\ufe0f <b>PolySignal Morning Brief</b>",
             "\u2501" * 20,
             f"Signals active: <b>{len(active)}</b> ({len(k_sigs)} Kalshi, {len(p_sigs)} Polymarket)",
             pt_line,
+            kalshi_line,
             "",
         ]
         if top_poly:
