@@ -48,7 +48,15 @@ DEFAULT_CONFIG = {
     "poly_min_total":    500.0,
     "poly_dominance":    0.65,
     "poly_min_momentum": 0.08,
-    "poly_max_price":    0.80,
+    "poly_max_price":    0.35,   # was 0.80 — this is a SEPARATE config default
+                                 # from worker.py's (two independent processes,
+                                 # each with their own in-memory _st). worker.py
+                                 # was correctly tightened days ago; this one
+                                 # was missed, meaning every manual Scan/Apply
+                                 # click here ran with the old, loose 0.80 cap
+                                 # the whole time, regardless of what worker.py
+                                 # was doing in the background. See the note in
+                                 # worker.py for the full history of this value.
     "poly_window_min":   30,
 }
 
@@ -560,7 +568,7 @@ tr:hover td{background:var(--surf)}
       <div class="field"><label>Min cluster ($)</label><input id="p-total" type="number" min="0" value="500"></div>
       <div class="field"><label>Min dominance (0-100)</label><input id="p-dom" type="number" min="50" max="100" value="65"></div>
       <div class="field"><label>Min momentum (¢)</label><input id="p-mom" type="number" min="0" value="8"></div>
-      <div class="field"><label>Max price (¢)</label><input id="p-maxp" type="number" min="10" max="95" value="80"></div>
+      <div class="field"><label>Max price (¢)</label><input id="p-maxp" type="number" min="10" max="95" value="35"></div>
     </div>
     <button class="sbtn" onclick="saveConfig()">Apply & Rescan Both</button>
     <div class="panel" style="margin-top:12px;padding:12px">
@@ -1177,7 +1185,7 @@ function updateUI(){
     document.getElementById('p-total').value=state.config.poly_min_total||500;
     document.getElementById('p-dom').value=Math.round((state.config.poly_dominance||0.65)*100);
     document.getElementById('p-mom').value=Math.round((state.config.poly_min_momentum||0.08)*100);
-    document.getElementById('p-maxp').value=Math.round((state.config.poly_max_price||0.80)*100);
+    document.getElementById('p-maxp').value=Math.round((state.config.poly_max_price||0.35)*100);
   }
   render(); renderCal();
 }
