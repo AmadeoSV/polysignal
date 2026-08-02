@@ -953,19 +953,32 @@ function renderAnalytics() {
   const sigAccCleanKalshi = a.sig_accuracy_clean_kalshi !== null && a.sig_accuracy_clean_kalshi !== undefined
     ? `${a.sig_accuracy_clean_kalshi}% <span style="font-size:11px;color:var(--muted)">(${a.sig_won_clean_kalshi}W/${a.sig_lost_clean_kalshi}L)</span>`
     : '<span style="font-size:13px;color:var(--muted)">Accumulating\u2026</span>';
-  let html=`<div class="agrid">
-    <div class="scard"><div class="sv" style="color:var(--amber)">${a.total_signals||0}</div><div class="sl">Total signals</div></div>
-    <div class="scard"><div class="sv" style="color:var(--blue)">${a.total_trades||0}</div><div class="sl">Total trades</div></div>
-    <div class="scard"><div class="sv" style="color:var(--green)">${a.win_rate||0}%</div><div class="sl">Trade win rate</div></div>
-    <div class="scard"><div class="sv" style="color:${pnlC(a.total_pnl)}">${pnlS(a.total_pnl)}</div><div class="sl">Total PnL</div></div>
-    <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--purple);font-size:18px">${sigAcc}</div><div class="sl">🎯 Signal accuracy — all-time (auto-tracked)</div></div>
-    <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--green);font-size:18px">${sigAccClean}</div><div class="sl">✅ Polymarket accuracy — since July 24 filter fix</div></div>
-    <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--green);font-size:18px">${sigAccCleanKalshi}</div><div class="sl">✅ Kalshi accuracy — since Aug 2 resolution fix</div></div>
+
+  // ZONE 1 -- Live validation: the actual thing being tested right now.
+  let html=`<div class="sec-title">\u{1f3af} Live validation \u2014 PRIME paper trading</div>
+  <div class="agrid">
     <div class="scard" style="grid-column:span 4">
       <div class="sv" style="color:var(--amber);font-size:16px">
         ${paperTrades.resolved ? `${paperTrades.win_rate}% (${paperTrades.won}W/${paperTrades.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(paperTrades.total_pnl)}">${pnlS(paperTrades.total_pnl)}</span> on $${paperTrades.total_staked} staked &nbsp; | &nbsp; ${paperTrades.pending||0} pending` : `Accumulating\u2026 (${paperTrades.pending||0} pending)`}
       </div>
-      <div class="sl">\u{1f4c4} PRIME paper trades — $5/signal, no real money (started July 24)</div>
+      <div class="sl">$5/signal, no real money (started July 24) \u2014 this is the number that matters</div>
+    </div>
+  </div>
+  <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
+
+  <div class="sec-title" style="margin-top:18px">\u{1f50d} Data integrity checks \u2014 is the outcome data trustworthy</div>
+  <div class="agrid">
+    <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--purple);font-size:16px">${sigAcc}</div><div class="sl">All-time (unfiltered, includes pre-fix history)</div></div>
+    <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--green);font-size:16px">${sigAccClean}</div><div class="sl">Polymarket \u2014 since July 24 filter fix</div></div>
+    <div class="scard" style="grid-column:span 4"><div class="sv" style="color:var(--green);font-size:16px">${sigAccCleanKalshi}</div><div class="sl">Kalshi \u2014 since Aug 2 resolution fix</div></div>
+  </div>
+
+  <div class="sec-title" style="margin-top:18px">\u{1f4ca} Volume & background</div>
+  <div class="agrid">
+    <div class="scard"><div class="sv" style="color:var(--amber)">${a.total_signals||0}</div><div class="sl">Total signals</div></div>
+    <div class="scard" style="grid-column:span 3">
+      <div class="sv" style="font-size:13px;color:var(--muted)">${a.total_trades||0} manual trade logged \u2014 ${a.win_rate||0}% win rate, ${pnlS(a.total_pnl)} \u2014 not the live strategy, see paper trading above</div>
+      <div class="sl">Legacy manual trade log</div>
     </div>
   </div>`;
 
@@ -982,7 +995,6 @@ function renderAnalytics() {
     html+=`</div>`;
   }
 
-  html+=`<div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>`;
   html+=`<div class="chart-wrap"><canvas id="sig-chart"></canvas></div>`;
 
   if(a.by_strategy&&Object.keys(a.by_strategy).length){
@@ -1017,8 +1029,14 @@ function initCharts() {
     if(charts.sig) charts.sig.destroy();
     charts.sig=new Chart(sigEl,{type:'bar',data:{
       labels:a.signals_by_day.map(d=>d.date),
-      datasets:[{data:a.signals_by_day.map(d=>d.count),backgroundColor:'rgba(59,130,246,.6)',borderRadius:3}]
-    },options:{...opts,plugins:{...opts.plugins,title:{display:true,text:'Signals per day',color:'#7a7a8a',font:{size:12}}}}});
+      datasets:[
+        {label:'Polymarket',data:a.signals_by_day.map(d=>d.polymarket),backgroundColor:'rgba(59,130,246,.7)',borderRadius:3},
+        {label:'Kalshi',data:a.signals_by_day.map(d=>d.kalshi),backgroundColor:'rgba(168,85,247,.7)',borderRadius:3}
+      ]
+    },options:{...opts,
+      plugins:{...opts.plugins,legend:{display:true,labels:{color:'#7a7a8a',font:{size:10}}},title:{display:true,text:'Signals per day',color:'#7a7a8a',font:{size:12}}},
+      scales:{x:{...opts.scales.x,stacked:true},y:{...opts.scales.y,stacked:true}}
+    }});
   }
 }
 

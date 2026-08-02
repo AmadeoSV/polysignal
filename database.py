@@ -318,14 +318,19 @@ def db_analytics() -> dict:
             })
 
         sig_by_day = {}
+        sig_by_day_platform = {}
         for i in range(14):
             d = (datetime.utcnow()-timedelta(days=i)).strftime("%m/%d")
             sig_by_day[d] = 0
+            sig_by_day_platform[d] = {"kalshi": 0, "polymarket": 0}
         for sig in s.query(Signal).filter(
             Signal.detected_at >= datetime.utcnow()-timedelta(days=14)
         ).all():
             d = sig.detected_at.strftime("%m/%d")
-            if d in sig_by_day: sig_by_day[d] += 1
+            if d in sig_by_day:
+                sig_by_day[d] += 1
+                if sig.platform in sig_by_day_platform[d]:
+                    sig_by_day_platform[d][sig.platform] += 1
 
         return {
             "total_signals":  total_sig,
@@ -348,7 +353,9 @@ def db_analytics() -> dict:
                                if v["count"] else 0} for k,v in by_strat.items()},
             "by_platform":    dict(by_platform),
             "pnl_series":     pnl_series,
-            "signals_by_day": [{"date":k,"count":v}
+            "signals_by_day": [{"date":k,"count":v,
+                                "kalshi":sig_by_day_platform[k]["kalshi"],
+                                "polymarket":sig_by_day_platform[k]["polymarket"]}
                                for k,v in sorted(sig_by_day.items())],
         }
 
