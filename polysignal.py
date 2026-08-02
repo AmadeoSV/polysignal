@@ -364,11 +364,27 @@ def api_recent_signals():
         if s.get("detected_at") and
         datetime.strptime(s["detected_at"], "%Y-%m-%d %H:%M") > cutoff
     ]
-    kalshi = [s for s in recent if s["platform"] == "kalshi"][:10]
-    poly   = [s for s in recent if s["platform"] == "polymarket"][:10]
+
+    def dedupe_by_ticker(sigs):
+        # recent is already ordered most-recent-first, so keeping the
+        # first occurrence per ticker keeps the latest one. Otherwise a
+        # single moving index can flood the list with near-duplicate
+        # bracket-range variants of the same underlying market, burying
+        # anything actually varied underneath repeats of one thing.
+        seen, out = set(), []
+        for s in sigs:
+            key = s.get("ticker") or s.get("market_title")
+            if key in seen: continue
+            seen.add(key); out.append(s)
+        return out
+
+    kalshi_all = [s for s in recent if s["platform"] == "kalshi"]
+    poly_all   = [s for s in recent if s["platform"] == "polymarket"]
+    kalshi = dedupe_by_ticker(kalshi_all)[:10]
+    poly   = dedupe_by_ticker(poly_all)[:10]
     return jsonify({"kalshi": kalshi, "polymarket": poly,
-                     "kalshi_count": len([s for s in recent if s["platform"]=="kalshi"]),
-                     "poly_count": len([s for s in recent if s["platform"]=="polymarket"])})
+                     "kalshi_count": len(kalshi_all),
+                     "poly_count": len(poly_all)})
 
 @app.route("/api/state")
 @requires_auth
