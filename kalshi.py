@@ -27,6 +27,16 @@ WATCHED_SERIES = [
     "KXNFLGAME","KXMLBGAME","KXATPGAME","KXWTPGAME",
 ]
 
+# Capture floor — the bar for saving a price move to the DB at all.
+# Deliberately much lower than any alert threshold: the goal right now is
+# broad data collection to empirically find where real signal lives, the
+# same way the Polymarket price-bucket analysis did, rather than hand-
+# guessing per-market thresholds up front. Alerting stays gated by the
+# stricter, tunable cfg thresholds in worker.py — this floor only filters
+# out true noise (a 0.1c tick, a market with no real book at all).
+CAPTURE_MIN_MOVE  = 0.005   # 0.5c
+CAPTURE_MIN_DEPTH = 100.0   # $100
+
 # Accumulator — tracks moves per market in a rolling window
 _accumulator: Dict[str, list] = defaultdict(list)
 ACCUM_WINDOW    = 4 * 3600  # 4 hours

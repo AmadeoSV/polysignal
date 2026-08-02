@@ -154,9 +154,8 @@ def run_kalshi_scan():
             if not ob: continue
             cur = kal.best_yes_price(ob)
             sig = kal.detect_move(ticker, m, ob, _kalshi_prev_prices.get(ticker),
-                                  cfg["min_move"], cfg["min_depth"])
+                                  kal.CAPTURE_MIN_MOVE, kal.CAPTURE_MIN_DEPTH)
             if sig:
-                new_sigs.append(sig)
                 sig["db_id"] = db_save_signal(sig, "kalshi")
                 # Seed price-after tracking so update_price_history() has
                 # something to fill in at the 15m/1h/4h/24h/7d buckets.
@@ -170,11 +169,21 @@ def run_kalshi_scan():
                         )
                     except Exception as e:
                         print(f"  price history init failed ({ticker}): {e}")
-                cluster = kal.check_accumulator(ticker, m, sig,
-                                                cur or 0,
-                                                kal.orderbook_depth(ob))
-                if cluster:
-                    check_cluster_alert(cluster)
+
+                # Everything above clears the low capture floor and gets
+                # saved either way, for later empirical threshold research.
+                # Alerting and the dashboard's active-signals list stay
+                # gated behind the real, stricter thresholds — nothing
+                # changes there.
+                meets_alert = (sig["move_abs"] >= cfg["min_move"]
+                                and sig["depth"] >= cfg["min_depth"])
+                if meets_alert:
+                    new_sigs.append(sig)
+                    cluster = kal.check_accumulator(ticker, m, sig,
+                                                    cur or 0,
+                                                    kal.orderbook_depth(ob))
+                    if cluster:
+                        check_cluster_alert(cluster)
             if cur is not None:
                 _kalshi_prev_prices[ticker] = cur
             if write_snaps:
