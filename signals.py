@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Set
 import requests
 
 from database import Session, Signal, Trade, engine, db_update_trade_price
-from kalshi import fetch_orderbook, best_yes_price
+from kalshi import fetch_orderbook, best_yes_price, fetch_market_status
 from telegram_bot import tg_send, format_kalshi_alert, format_cluster_alert, format_poly_alert, format_resolution_msg
 
 POLY_API       = "https://data-api.polymarket.com"
@@ -485,7 +485,7 @@ def update_open_trade_prices():
         time.sleep(0.3)
 
 
-def check_signal_outcomes():
+def check_signal_outcomes(cfg=None):
     """
     For every unresolved signal check if the market has ACTUALLY closed.
 
@@ -496,10 +496,21 @@ def check_signal_outcomes():
     re-checked (Signal.outcome == None filter excludes it forever) — so
     a single price spike could permanently mislabel a still-live signal.
 
-    Now: for Polymarket, pull condition_id from platform_signal_id and
-    check the market's own "closed" flag via Gamma before trusting its
-    price as final. Kalshi's path (orderbook-based) is separate and
-    unaffected — that mechanism doesn't have this failure mode.
+    For Polymarket: pull condition_id from platform_signal_id and check
+    the market's own "closed" flag via Gamma before trusting price.
+
+    For Kalshi: this used to be assumed immune to the same failure mode,
+    but that wasn't actually verified — WATCHED_SERIES includes live
+    sports markets (NBA/NFL/MLB/tennis) that can spike the same way a
+    live tennis match did on Polymarket. Now checks Kalshi's own
+    authoritative `result` field via fetch_market_status() instead of
+    inferring resolution from price at all.
+
+    `cfg` (optional): current alert thresholds, used only to decide
+    whether a Kalshi resolution is worth a Telegram ping — since Kalshi
+    now captures broadly (see CAPTURE_MIN_MOVE/DEPTH) but should only
+    notify on what would've actually been alert-worthy, the same
+    distinction Polymarket already makes via PaperTrade existence.
     """
     with Session(engine) as s:
         pending = s.query(Signal).filter(
@@ -508,9 +519,10 @@ def check_signal_outcomes():
         ).all()
         pending_data = [
             (p.id, p.platform, p.ticker, p.market_url, p.signal_type,
-             p.market_title, p.platform_signal_id)
+             p.market_title, p.platform_signal_id, p.move_size, p.depth)
             for p in pending
         ]
+
 
     if not pending_data:
         return
@@ -518,24 +530,21 @@ def check_signal_outcomes():
     print(f"Outcome check: {len(pending_data)} pending signals...")
     resolved = 0
 
-    for sig_id, platform, ticker, market_url, sig_type, title, sig_key in pending_data:
+    for sig_id, platform, ticker, market_url, sig_type, title, sig_key, move_size, depth in pending_data:
         try:
             cur_price = None
 
             if platform == "kalshi":
-                ob = fetch_orderbook(ticker)
-                if ob:
-                    cur_price = best_yes_price(ob)
-                if cur_price is None:
+                status = fetch_market_status(ticker)
+                if status is None or not status.get("result"):
+                    # Not actually settled yet — genuinely still pending,
+                    # regardless of what the live price happens to be
+                    # doing right now (a live-game price spike no longer
+                    # gets mistaken for the market having closed).
                     time.sleep(0.2)
                     continue
-                if cur_price >= 0.95:
-                    resolved_yes = True
-                elif cur_price <= 0.05:
-                    resolved_yes = False
-                else:
-                    time.sleep(0.2)
-                    continue
+                resolved_yes = status["result"] == "yes"
+                cur_price = 1.0 if resolved_yes else 0.0
             else:
                 # sig_key format: "P:{conditionId}:{outcome}" or
                 # "P:{conditionId}:{outcome}:LIVE_BUY"
@@ -594,12 +603,24 @@ def check_signal_outcomes():
                     row.outcome = outcome
                     s.commit()
                     resolved += 1
-                    tg_send(format_resolution_msg(
-                        title=title or ticker or "market",
-                        outcome=outcome,
-                        sig_type=sig_type,
-                        cur_price=cur_price,
-                    ))
+                    # Kalshi now captures broadly (below any real alert
+                    # threshold) so it can be researched later — but a
+                    # resolution ping should only fire for what would
+                    # actually have been alert-worthy, same distinction
+                    # Polymarket already makes via PaperTrade existence.
+                    was_alert_worthy = (
+                        cfg is not None
+                        and move_size is not None and depth is not None
+                        and abs(move_size) >= cfg.get("min_move", float("inf"))
+                        and depth >= cfg.get("min_depth", float("inf"))
+                    )
+                    if was_alert_worthy:
+                        tg_send(format_resolution_msg(
+                            title=title or ticker or "market",
+                            outcome=outcome,
+                            sig_type=sig_type,
+                            cur_price=cur_price,
+                        ))
         except Exception as e:
             print(f"  Outcome error for {title}: {e}")
         time.sleep(0.3)

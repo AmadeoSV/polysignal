@@ -213,7 +213,7 @@ def run_kalshi_scan():
             _st["scan_count"]     += 1
         print(f"Kalshi done — {len(new_sigs)} signals.")
         update_open_trade_prices()
-        check_signal_outcomes()
+        check_signal_outcomes(cfg)
         try:
             from database import db_resolve_paper_trades
             n = db_resolve_paper_trades()

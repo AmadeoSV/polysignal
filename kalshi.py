@@ -64,6 +64,23 @@ def fetch_orderbook(ticker: str) -> Optional[dict]:
     except: return None
 
 
+def fetch_market_status(ticker: str) -> Optional[dict]:
+    """
+    Returns {"status": ..., "result": "yes"/"no"/""} for a ticker, or None
+    on failure. `result` is Kalshi's own authoritative settlement field —
+    empty until the market actually resolves, then "yes" or "no". Used so
+    resolution never has to infer a market's outcome from a price
+    threshold, the same class of bug that caused the 53% mislabeling
+    issue on the Polymarket side (a price spike near 95c/5c during a
+    still-live event was mistaken for the market having closed).
+    """
+    try:
+        m = get_json(f"{KALSHI_API}/markets/{ticker}").get("market", {})
+        return {"status": m.get("status", ""), "result": m.get("result", "")}
+    except:
+        return None
+
+
 def best_yes_price(ob: dict) -> Optional[float]:
     bids = ob.get("yes_dollars") or []
     if not bids: return None
