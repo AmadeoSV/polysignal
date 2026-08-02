@@ -264,16 +264,37 @@ def db_analytics() -> dict:
         # bug was fixed, AND explicitly re-checked at <=0.45 here too — not
         # just trusting the deploy timestamp. This way the stat stays
         # correct even if some future bug lets a bad-priced signal through
-        # again; it won't silently count it as "clean."
+        # again; it won't silently count it as "clean." Explicitly scoped
+        # to Polymarket — was implicitly Polymarket-only for months while
+        # Kalshi detection was dead, but now that Kalshi produces real
+        # signals too this needs its own platform filter or it silently
+        # blends two very different systems into one number.
         won_clean  = s.query(func.count(Signal.id)).filter(
+            Signal.platform=="polymarket",
             Signal.outcome=="WON", Signal.detected_at > ACCURACY_FIX_CUTOFF,
             Signal.price_after <= ACCURACY_PRICE_CAP
         ).scalar() or 0
         lost_clean = s.query(func.count(Signal.id)).filter(
+            Signal.platform=="polymarket",
             Signal.outcome=="LOST", Signal.detected_at > ACCURACY_FIX_CUTOFF,
             Signal.price_after <= ACCURACY_PRICE_CAP
         ).scalar() or 0
         sig_accuracy_clean = round(won_clean/(won_clean+lost_clean)*100,1) if (won_clean+lost_clean) else None
+
+        # Kalshi's own "clean" stat. No cutoff or price cap needed — unlike
+        # Polymarket, Kalshi's history was fully reset (all outcomes set
+        # back to NULL) after fixing the resolution bug on 2026-08-02, so
+        # every currently-resolved Kalshi signal is clean by construction.
+        won_clean_kalshi  = s.query(func.count(Signal.id)).filter(
+            Signal.platform=="kalshi", Signal.outcome=="WON"
+        ).scalar() or 0
+        lost_clean_kalshi = s.query(func.count(Signal.id)).filter(
+            Signal.platform=="kalshi", Signal.outcome=="LOST"
+        ).scalar() or 0
+        sig_accuracy_clean_kalshi = (
+            round(won_clean_kalshi/(won_clean_kalshi+lost_clean_kalshi)*100,1)
+            if (won_clean_kalshi+lost_clean_kalshi) else None
+        )
 
         by_strat = defaultdict(lambda:{"count":0,"pnl":0,"wins":0})
         for t in closed:
@@ -320,6 +341,9 @@ def db_analytics() -> dict:
             "sig_accuracy_clean": sig_accuracy_clean,
             "sig_won_clean":      won_clean,
             "sig_lost_clean":     lost_clean,
+            "sig_accuracy_clean_kalshi": sig_accuracy_clean_kalshi,
+            "sig_won_clean_kalshi":      won_clean_kalshi,
+            "sig_lost_clean_kalshi":     lost_clean_kalshi,
             "by_strategy":    {k: {**v, "win_rate": round(v["wins"]/v["count"]*100,1)
                                if v["count"] else 0} for k,v in by_strat.items()},
             "by_platform":    dict(by_platform),

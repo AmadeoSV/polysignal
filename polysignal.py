@@ -950,13 +950,17 @@ function renderAnalytics() {
   const sigAccClean = a.sig_accuracy_clean !== null && a.sig_accuracy_clean !== undefined
     ? `${a.sig_accuracy_clean}% <span style="font-size:11px;color:var(--muted)">(${a.sig_won_clean}W/${a.sig_lost_clean}L)</span>`
     : '<span style="font-size:13px;color:var(--muted)">Accumulating\u2026</span>';
+  const sigAccCleanKalshi = a.sig_accuracy_clean_kalshi !== null && a.sig_accuracy_clean_kalshi !== undefined
+    ? `${a.sig_accuracy_clean_kalshi}% <span style="font-size:11px;color:var(--muted)">(${a.sig_won_clean_kalshi}W/${a.sig_lost_clean_kalshi}L)</span>`
+    : '<span style="font-size:13px;color:var(--muted)">Accumulating\u2026</span>';
   let html=`<div class="agrid">
     <div class="scard"><div class="sv" style="color:var(--amber)">${a.total_signals||0}</div><div class="sl">Total signals</div></div>
     <div class="scard"><div class="sv" style="color:var(--blue)">${a.total_trades||0}</div><div class="sl">Total trades</div></div>
     <div class="scard"><div class="sv" style="color:var(--green)">${a.win_rate||0}%</div><div class="sl">Trade win rate</div></div>
     <div class="scard"><div class="sv" style="color:${pnlC(a.total_pnl)}">${pnlS(a.total_pnl)}</div><div class="sl">Total PnL</div></div>
     <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--purple);font-size:18px">${sigAcc}</div><div class="sl">🎯 Signal accuracy — all-time (auto-tracked)</div></div>
-    <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--green);font-size:18px">${sigAccClean}</div><div class="sl">✅ Signal accuracy — since July 24 filter fix</div></div>
+    <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--green);font-size:18px">${sigAccClean}</div><div class="sl">✅ Polymarket accuracy — since July 24 filter fix</div></div>
+    <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--green);font-size:18px">${sigAccCleanKalshi}</div><div class="sl">✅ Kalshi accuracy — since Aug 2 resolution fix</div></div>
     <div class="scard" style="grid-column:span 4">
       <div class="sv" style="color:var(--amber);font-size:16px">
         ${paperTrades.resolved ? `${paperTrades.win_rate}% (${paperTrades.won}W/${paperTrades.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(paperTrades.total_pnl)}">${pnlS(paperTrades.total_pnl)}</span> on $${paperTrades.total_staked} staked &nbsp; | &nbsp; ${paperTrades.pending||0} pending` : `Accumulating\u2026 (${paperTrades.pending||0} pending)`}
