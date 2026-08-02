@@ -409,6 +409,8 @@ def _sig_dict(r: Signal) -> dict:
         "signal_type": r.signal_type, "move_size": r.move_size,
         "price_before": r.price_before, "price_after": r.price_after,
         "depth": r.depth, "outcome": r.outcome, "market_url": r.market_url,
+        "market_close_time": r.market_close_time,
+        "platform_signal_id": r.platform_signal_id,
         "detected_at": r.detected_at.strftime("%Y-%m-%d %H:%M") if r.detected_at else "",
         "hours_to_close": r.hours_to_close,
         "trader_count": r.trader_count,

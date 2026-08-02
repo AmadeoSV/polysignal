@@ -707,6 +707,39 @@ const oc=o=>{const u=o.toUpperCase();return u==='YES'?'b-up':u==='NO'?'b-dn':'b-
 const stars=s=>{const ic=['','🔵','🟢','🟡','🟠','🔴'];return ic[Math.min(s||1,5)];}
 
 // ── Dashboard tab ─────────────────────────────────────────────────────────────
+// Adapters: DB-shaped signal dict -> the same shape renderKalshiCard/
+// renderPolyCard/getAction already expect from a live in-process scan.
+// Reuses the real, rich card renderers instead of a separate, simpler
+// display -- nearly everything they need (price before/after, dominance,
+// trader count, depth, opposite-trader count, close time) is already
+// in the database. The one real gap: opposite-side traders is stored
+// as a count, not a dollar value, so that specific warning line is
+// left out here rather than shown with a fabricated percentage.
+function adaptKalshiFromDb(s) {
+  return {
+    direction: s.signal_type, move_abs: s.move_size,
+    prev_price: s.price_before, cur_price: s.price_after,
+    depth: s.depth, title: s.market_title, ts_label: s.detected_at,
+    end_date: s.market_close_time, url: s.market_url,
+    ticker: s.ticker, db_id: s.id,
+  };
+}
+function adaptPolyFromDb(r) {
+  const parts = (r.platform_signal_id||'').split(':');
+  const outcomeName = parts.length>=3 ? parts[2] : '';
+  return {
+    kind: r.signal_type, dominance: r.dominance,
+    upside: 1-(r.price_after||0), momentum: r.move_size,
+    avgEntry: r.price_before, curPrice: r.price_after,
+    traders: r.trader_count, outcome: outcomeName,
+    totalValue: r.depth, oppositeTraders: r.opposite_traders,
+    oppositeValue: 0, // not stored as a $ amount -- see note above
+    title: r.market_title, market_url: r.market_url,
+    endDate: r.market_close_time, end_date: r.market_close_time,
+    db_id: r.id, conditionId: parts.length>=2 ? parts[1] : '',
+  };
+}
+
 function renderHome() {
   const a=analytics; const sc=state.scanning_kalshi||state.scanning_poly_pos||state.scanning_poly_live;
 
@@ -725,27 +758,18 @@ function renderHome() {
     <div class="scard"><div class="sv" style="color:${pnlC(a.total_pnl)}">${pnlS(a.total_pnl)}</div><div class="sl">Total PnL</div></div>
   </div>`;
 
-  const dbRow = s => {
-    const mv = s.move_size!=null ? (s.move_size>=0?'+':'')+(s.move_size*100).toFixed(1)+'¢' : '';
-    const px = s.price_after!=null ? (s.price_after*100).toFixed(1)+'¢' : '';
-    const dom = s.dominance!=null ? Math.round(s.dominance*100)+'%' : '';
-    return `<div class="card" style="padding:10px 14px;margin-bottom:6px">
-      <div style="font-size:13px;font-weight:600">${s.market_title||s.ticker||''}</div>
-      <div style="font-size:11px;color:var(--muted)">${px} ${mv?('| '+mv+' move'):''} ${dom?('| '+dom+' consensus'):''} ${s.detected_at?('| '+s.detected_at):''}</div>
-    </div>`;
-  };
-
   const ksigs = recentSignals.kalshi||[];
   if(ksigs.length){
-    html+=`<div class="sec-title">⚡ Recent Kalshi signals (last 24h)</div>`;
-    ksigs.forEach(s=>{html+=dbRow(s);});
-    html+=`<div style="margin-bottom:14px"></div>`;
+    html+=`<div class="sec-title">⚡ Recent Kalshi signals (last 24h)</div><div class="grid">`;
+    ksigs.forEach(s=>{html+=renderKalshiCard(adaptKalshiFromDb(s),true);});
+    html+=`</div><div style="margin-bottom:14px"></div>`;
   }
 
   const psigs = recentSignals.polymarket||[];
   if(psigs.length){
-    html+=`<div class="sec-title">📊 Recent Polymarket signals (last 24h)</div>`;
-    psigs.forEach(r=>{html+=dbRow(r);});
+    html+=`<div class="sec-title">📊 Recent Polymarket signals (last 24h)</div><div class="grid">`;
+    psigs.forEach(r=>{html+=renderPolyCard(adaptPolyFromDb(r),true);});
+    html+=`</div>`;
   }
 
   if(!ksigs.length && !psigs.length)
@@ -902,7 +926,7 @@ function renderPolyCard(r,compact=false) {
   const mom_c = ((r.momentum||0)*100).toFixed(1);
   const mom   = (r.momentum||0)*100;
   const slug  = r.eventSlug||r.slug||'';
-  const url   = slug?`https://polymarket.com/event/${slug}`:'';
+  const url   = slug?`https://polymarket.com/event/${slug}`:(r.market_url||'');
   const dbid  = r.db_id||'';
   const hor   = timeHorizon(r.endDate||r.end_date||'');
   const avgC  = ((r.avgEntry||0)*100).toFixed(1);
