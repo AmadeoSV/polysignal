@@ -39,6 +39,13 @@ from telegram_bot import (tg_send, poll_loop,
 # ── Shared state ───────────────────────────────────────────────────────────────
 _lock = threading.Lock()
 _last_snapshot_write = 0.0  # snapshots persist on first scan, then every SNAPSHOT_INTERVAL
+
+# Kalshi's own price memory, kept ACROSS scans (not reset each call). Was
+# previously declared fresh inside run_kalshi_scan() every single scan,
+# meaning detect_move() always received prev_price=None and could never
+# actually register a move — Kalshi has effectively never been able to
+# fire a real detect_move() signal since the worker/dashboard split.
+_kalshi_prev_prices = {}
 _st = {
     "config": {
         "min_move":          0.03,
@@ -129,7 +136,6 @@ def run_kalshi_scan():
     try:
         print("Kalshi scan starting…")
         markets     = kal.fetch_markets()
-        prev_prices = {}
         print(f"  {len(markets)} markets")
         new_sigs    = []
 
@@ -147,7 +153,7 @@ def run_kalshi_scan():
             ob = kal.fetch_orderbook(ticker)
             if not ob: continue
             cur = kal.best_yes_price(ob)
-            sig = kal.detect_move(ticker, m, ob, prev_prices.get(ticker),
+            sig = kal.detect_move(ticker, m, ob, _kalshi_prev_prices.get(ticker),
                                   cfg["min_move"], cfg["min_depth"])
             if sig:
                 new_sigs.append(sig)
@@ -170,7 +176,7 @@ def run_kalshi_scan():
                 if cluster:
                     check_cluster_alert(cluster)
             if cur is not None:
-                prev_prices[ticker] = cur
+                _kalshi_prev_prices[ticker] = cur
             if write_snaps:
                 snapshot_rows.append(MarketSnapshot(
                     platform="kalshi", ticker=ticker,
