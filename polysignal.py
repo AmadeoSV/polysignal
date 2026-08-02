@@ -357,7 +357,7 @@ def api_recent_signals():
     both processes write to the same shared database.
     """
     from datetime import datetime, timedelta
-    all_recent = db_get_signals(limit=300)
+    all_recent = db_get_signals(limit=500)
     cutoff = datetime.utcnow() - timedelta(hours=24)
     recent = [
         s for s in all_recent
@@ -380,8 +380,8 @@ def api_recent_signals():
 
     kalshi_all = [s for s in recent if s["platform"] == "kalshi"]
     poly_all   = [s for s in recent if s["platform"] == "polymarket"]
-    kalshi = dedupe_by_ticker(kalshi_all)[:10]
-    poly   = dedupe_by_ticker(poly_all)[:10]
+    kalshi = dedupe_by_ticker(kalshi_all)[:50]
+    poly   = dedupe_by_ticker(poly_all)[:50]
     return jsonify({"kalshi": kalshi, "polymarket": poly,
                      "kalshi_count": len(kalshi_all),
                      "poly_count": len(poly_all)})
@@ -682,7 +682,7 @@ const TABS=['home','kalshi','polymarket','trades','analytics'];
 function showTab(t) {
   tab=t;
   TABS.forEach(x=>document.getElementById('tab-'+x).classList.toggle('active',x===t));
-  if(t==='home')       fetchRecentSignals();
+  if(t==='home'||t==='kalshi'||t==='polymarket') fetchRecentSignals();
   if(t==='trades')    fetchTrades();
   if(t==='analytics') fetchAnalytics();
   render();
@@ -734,7 +734,7 @@ function adaptPolyFromDb(r) {
     traders: r.trader_count, outcome: outcomeName,
     totalValue: r.depth, oppositeTraders: r.opposite_traders,
     oppositeValue: 0, // not stored as a $ amount -- see note above
-    title: r.market_title, market_url: r.market_url,
+    title: r.market_title, market_url: r.market_url, category: r.category,
     endDate: r.market_close_time, end_date: r.market_close_time,
     db_id: r.id, conditionId: parts.length>=2 ? parts[1] : '',
   };
@@ -781,11 +781,19 @@ function renderHome() {
 
 // ── Kalshi tab ────────────────────────────────────────────────────────────────
 function renderKalshi() {
-  const rows=liveFilter==='up'?state.kalshi_signals.filter(s=>s.direction==='UP')
-            :liveFilter==='down'?state.kalshi_signals.filter(s=>s.direction==='DOWN')
-            :state.kalshi_signals;
-  const buys=state.kalshi_signals.filter(s=>s.direction==='UP').length;
-  const sells=state.kalshi_signals.filter(s=>s.direction==='DOWN').length;
+  const minMove  = state.config.kalshi_min_move  || 0.03;
+  const minDepth = state.config.kalshi_min_depth || 1000;
+  // Only alert-quality signals here -- the DB also holds broad-capture
+  // noise-floor data (as of today, saved for later research), which
+  // would otherwise flood this tab with sub-threshold ticks.
+  const adapted = (recentSignals.kalshi||[])
+    .filter(s => Math.abs(s.move_size||0) >= minMove && (s.depth||0) >= minDepth)
+    .map(adaptKalshiFromDb);
+  const rows=liveFilter==='up'?adapted.filter(s=>s.direction==='UP')
+            :liveFilter==='down'?adapted.filter(s=>s.direction==='DOWN')
+            :adapted;
+  const buys=adapted.filter(s=>s.direction==='UP').length;
+  const sells=adapted.filter(s=>s.direction==='DOWN').length;
   let html=`<div class="summary">
     <div class="scard"><div class="sv" style="color:var(--green)">${buys}</div><div class="sl">🟢 Buys</div></div>
     <div class="scard"><div class="sv" style="color:var(--red)">${sells}</div><div class="sl">🔴 Sells</div></div>
@@ -797,8 +805,8 @@ function renderKalshi() {
     <div class="fbtn ${liveFilter==='down'?'on':''}" onclick="liveFilter='down';render()">🔴 Sells</div>
   </div>
   <div class="grid">`;
-  if(!rows.length) html+=`<div class="empty"><h3>${state.scanning_kalshi?'Scanning…':'No signals'}</h3>
-    <p>Lower min move or depth in filters.</p></div>`;
+  if(!rows.length) html+=`<div class="empty"><h3>${state.scanning_kalshi?'Scanning…':'No signals in the last 24h'}</h3>
+    <p>Real detections from the background scanner \u2014 lower filters won't change this, it just means nothing's cleared the alert threshold recently.</p></div>`;
   else rows.forEach(s=>{html+=renderKalshiCard(s,false);});
   return html+'</div>';
 }
@@ -836,7 +844,10 @@ function getAction(r, platform) {
 let polyFilter = 'all'; // all / sports / crypto / politics / economics
 
 function renderPoly() {
-  const rows = polyTab==='live' ? state.poly_live : state.poly_positions;
+  const adaptedAll = (recentSignals.polymarket||[]).map(adaptPolyFromDb);
+  const positions = adaptedAll.filter(r=>r.kind==='OPEN_POSITION');
+  const live       = adaptedAll.filter(r=>r.kind==='LIVE_BUY');
+  const rows = polyTab==='live' ? live : positions;
   const cats = [...new Set(rows.map(r=>r.category||'').filter(Boolean))].sort();
 
   const filtered = polyFilter==='all' ? rows : rows.filter(r=>(r.category||'').toLowerCase()===polyFilter.toLowerCase());
@@ -846,8 +857,8 @@ function renderPoly() {
     <div class="fbtn ${polyTab==='live'?'on':''}"      onclick="polyTab='live';render()">⚡ Live Buys</div>
   </div>
   <div class="summary">
-    <div class="scard"><div class="sv" style="color:var(--blue)">${state.poly_positions.length}</div><div class="sl">Positions</div></div>
-    <div class="scard"><div class="sv" style="color:var(--amber)">${state.poly_live.length}</div><div class="sl">Live buys</div></div>
+    <div class="scard"><div class="sv" style="color:var(--blue)">${positions.length}</div><div class="sl">Positions</div></div>
+    <div class="scard"><div class="sv" style="color:var(--amber)">${live.length}</div><div class="sl">Live buys</div></div>
     <div class="scard"><div class="sv" style="color:var(--muted)">${state.poly_traders}</div><div class="sl">Traders</div></div>
   </div>`;
 
@@ -862,7 +873,7 @@ function renderPoly() {
   }
 
   html += `<div class="grid">`;
-  if(!filtered.length) html+=`<div class="empty"><h3>No signals</h3><p>Lower filters or wait for next scan.</p></div>`;
+  if(!filtered.length) html+=`<div class="empty"><h3>No signals in the last 24h</h3><p>Real detections from the background scanner.</p></div>`;
   else filtered.forEach(r=>{html+=renderPolyCard(r,false);});
   return html+'</div>';
 }
