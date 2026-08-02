@@ -346,6 +346,30 @@ def handle_cmd(text: str, chat_id: str):
 def index():
     return render_template_string(HTML)
 
+@app.route("/api/recent_signals")
+@requires_auth
+def api_recent_signals():
+    """
+    Real, DB-backed recent activity — unlike /api/state's kalshi_signals/
+    poly_positions (this process's own local in-memory scan results,
+    which stay empty unless THIS specific process has run its own scan),
+    this reflects what the actual worker process has detected, since
+    both processes write to the same shared database.
+    """
+    from datetime import datetime, timedelta
+    all_recent = db_get_signals(limit=300)
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    recent = [
+        s for s in all_recent
+        if s.get("detected_at") and
+        datetime.strptime(s["detected_at"], "%Y-%m-%d %H:%M") > cutoff
+    ]
+    kalshi = [s for s in recent if s["platform"] == "kalshi"][:10]
+    poly   = [s for s in recent if s["platform"] == "polymarket"][:10]
+    return jsonify({"kalshi": kalshi, "polymarket": poly,
+                     "kalshi_count": len([s for s in recent if s["platform"]=="kalshi"]),
+                     "poly_count": len([s for s in recent if s["platform"]=="polymarket"])})
+
 @app.route("/api/state")
 @requires_auth
 def api_state():
@@ -633,7 +657,7 @@ tr:hover td{background:var(--surf)}
 <script>
 let tab='home', liveFilter='all', polyTab='positions';
 let state={kalshi_signals:[],poly_positions:[],poly_live:[],config:{},events:[],db_size_mb:0};
-let sigs_db=[], trades_db=[], analytics={}, paperTrades={};
+let sigs_db=[], trades_db=[], analytics={}, paperTrades={}, recentSignals={kalshi:[],polymarket:[],kalshi_count:0,poly_count:0};
 let calY=new Date().getFullYear(), calM=new Date().getMonth(), selDay=null;
 let charts={};
 
@@ -642,6 +666,7 @@ const TABS=['home','kalshi','polymarket','trades','analytics'];
 function showTab(t) {
   tab=t;
   TABS.forEach(x=>document.getElementById('tab-'+x).classList.toggle('active',x===t));
+  if(t==='home')       fetchRecentSignals();
   if(t==='trades')    fetchTrades();
   if(t==='analytics') fetchAnalytics();
   render();
@@ -668,36 +693,49 @@ const stars=s=>{const ic=['','🔵','🟢','🟡','🟠','🔴'];return ic[Math.
 // ── Dashboard tab ─────────────────────────────────────────────────────────────
 function renderHome() {
   const a=analytics; const sc=state.scanning_kalshi||state.scanning_poly_pos||state.scanning_poly_live;
-  const kbuys=state.kalshi_signals.filter(s=>s.direction==='UP').length;
-  const ksells=state.kalshi_signals.filter(s=>s.direction==='DOWN').length;
-  const penter=state.poly_positions.filter(r=>r.recommendation==='ENTER'||r.traders>=3).length;
+
+  // Real, DB-backed counts (last 24h) -- NOT state.kalshi_signals /
+  // state.poly_positions, which only ever reflect THIS process's own
+  // local scans. worker.py runs the real, continuous scanner as a
+  // separate process; the dashboard has to ask the database what
+  // actually happened, the same way a person checking via SQL would.
+  const kCount = recentSignals.kalshi_count||0;
+  const pCount = recentSignals.poly_count||0;
 
   let html=`<div class="summary">
-    <div class="scard"><div class="sv" style="color:var(--amber)">${state.kalshi_signals.length}</div><div class="sl">Kalshi signals</div></div>
-    <div class="scard"><div class="sv" style="color:var(--blue)">${state.poly_positions.length}</div><div class="sl">Poly positions</div></div>
+    <div class="scard"><div class="sv" style="color:var(--amber)">${kCount}</div><div class="sl">Kalshi signals (24h)</div></div>
+    <div class="scard"><div class="sv" style="color:var(--blue)">${pCount}</div><div class="sl">Poly signals (24h)</div></div>
     <div class="scard"><div class="sv" style="color:var(--green)">${a.open_trades||0}</div><div class="sl">Open trades</div></div>
     <div class="scard"><div class="sv" style="color:${pnlC(a.total_pnl)}">${pnlS(a.total_pnl)}</div><div class="sl">Total PnL</div></div>
   </div>`;
 
-  // top kalshi signals
-  const ksigs=state.kalshi_signals.slice(0,3);
+  const dbRow = s => {
+    const mv = s.move_size!=null ? (s.move_size>=0?'+':'')+(s.move_size*100).toFixed(1)+'¢' : '';
+    const px = s.price_after!=null ? (s.price_after*100).toFixed(1)+'¢' : '';
+    const dom = s.dominance!=null ? Math.round(s.dominance*100)+'%' : '';
+    return `<div class="card" style="padding:10px 14px;margin-bottom:6px">
+      <div style="font-size:13px;font-weight:600">${s.market_title||s.ticker||''}</div>
+      <div style="font-size:11px;color:var(--muted)">${px} ${mv?('| '+mv+' move'):''} ${dom?('| '+dom+' consensus'):''} ${s.detected_at?('| '+s.detected_at):''}</div>
+    </div>`;
+  };
+
+  const ksigs = recentSignals.kalshi||[];
   if(ksigs.length){
-    html+=`<div class="sec-title">⚡ Latest Kalshi signals</div><div class="grid">`;
-    ksigs.forEach(s=>{html+=renderKalshiCard(s,true);});
-    html+=`</div><div style="margin-bottom:14px"></div>`;
+    html+=`<div class="sec-title">⚡ Recent Kalshi signals (last 24h)</div>`;
+    ksigs.forEach(s=>{html+=dbRow(s);});
+    html+=`<div style="margin-bottom:14px"></div>`;
   }
 
-  // top poly positions
-  const psigs=state.poly_positions.slice(0,3);
+  const psigs = recentSignals.polymarket||[];
   if(psigs.length){
-    html+=`<div class="sec-title">📊 Top Polymarket positions</div><div class="grid">`;
-    psigs.forEach(r=>{html+=renderPolyCard(r,true);});
-    html+=`</div>`;
+    html+=`<div class="sec-title">📊 Recent Polymarket signals (last 24h)</div>`;
+    psigs.forEach(r=>{html+=dbRow(r);});
   }
 
   if(!ksigs.length && !psigs.length)
-    html+=`<div class="empty"><h3>${sc?'Scanning…':'No signals yet'}</h3>
-      <p>${sc?'Both scanners running. Check back in a minute.':'Hit Scan to start.'}</p></div>`;
+    html+=`<div class="empty"><h3>${sc?'Scanning\u2026':'No signals in the last 24h'}</h3>
+      <p>${sc?'Both scanners running. Check back in a minute.':'The background scanner runs continuously \u2014 check the Kalshi/Polymarket tabs or Telegram for the latest.'}</p></div>`;
+
   return html;
 }
 
@@ -1100,6 +1138,7 @@ async function submitClose(){
 async function fetchTrades(){try{const r=await fetch('/api/trades');trades_db=await r.json();render();}catch(e){}}
 async function fetchAnalytics(){try{const r=await fetch('/api/analytics');analytics=await r.json();await fetchPaperTrades();render();}catch(e){}}
 async function fetchPaperTrades(){try{const r=await fetch('/api/paper_trades');paperTrades=await r.json();}catch(e){}}
+async function fetchRecentSignals(){try{const r=await fetch('/api/recent_signals');recentSignals=await r.json();render();}catch(e){}}
 
 // ── Calendar ──────────────────────────────────────────────────────────────────
 function calNav(d){calM+=d;if(calM>11){calM=0;calY++;}if(calM<0){calM=11;calY--;}renderCal();}
@@ -1219,6 +1258,7 @@ async function saveConfig(){
 
 // init analytics so header shows something
 fetchAnalytics();
+fetchRecentSignals();
 poll();
 </script></body></html>"""
 
