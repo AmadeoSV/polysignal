@@ -32,7 +32,9 @@ That number turned out to be substantially inflated by a resolution bug: the out
 | 66–80¢ | -20.4¢ | -2.8¢ |
 | 80¢+ | -48.7¢ | -1.0¢ |
 
-The market is far more efficient than the initial backtest suggested. A real, statistically defensible edge (32% win rate vs. a 25% breakeven implied by price) survives specifically in fresh, sub-35¢ signals — everything above ~50¢ is close to fairly priced, not badly mispriced.
+The market is far more efficient than the initial backtest suggested. A real, statistically defensible edge (32% win rate vs. a 25% breakeven implied by price) survives specifically in sub-35¢ signals — everything above ~50¢ is close to fairly priced, not badly mispriced.
+
+A later pass, splitting this same ≤35¢ population further by freshness (signals caught before vs. after meaningful price drift), found the edge concentrates even more specifically in the fresh tier: **+16.1¢/contract** for signals with <2¢ drift since detection, versus **-2.1¢** for signals where price had already moved — run on a larger, further-accumulated dataset than the 391-market table above, not a strict subset of it. Production alerting now uses this freshness split (see [Signal Logic](#signal-logic) below), since it's the more specific and more recent of the two findings.
 
 Both the resolution bug and the audit fix are live in production. `poly_max_price` and alerting are tuned to the corrected finding, not the original inflated one.
 
