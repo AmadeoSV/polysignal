@@ -46,6 +46,20 @@ Rather than trust the corrected backtest alone, every signal that clears the val
 
 ---
 
+## Kalshi: The Same Audit Discipline, Applied a Second Time
+
+Kalshi order-flow detection had been running for two months and had produced essentially nothing — 21 signals total, against 6,500+ from Polymarket over the same window. That gap was suspicious enough to investigate directly rather than assume Kalshi's markets were just quiet.
+
+**The cause:** `detect_move()` decides whether a price counts as a real move by comparing it to the previous scan's price for that market. That previous-price memory was being rebuilt empty at the start of every single scan, instead of persisting between them — so the comparison always had nothing to compare against, and the function could never fire. Not a tuning problem; a structural one, present since the scanner was first split into its own service.
+
+Fixed by moving that memory to persist across scans instead of resetting each time. Kalshi began detecting real signals within minutes of deploying the fix.
+
+**A second bug, found while checking whether the fix could be trusted:** before treating any of Kalshi's new signal volume as reliable, its outcome-resolution logic got the same scrutiny that had already caught a major bug on the Polymarket side. It turned out to have the *exact same* flaw — a price crossing 95¢ or 5¢ was being treated as proof a market had closed, with no check on whether it actually had. A code comment nearby claimed Kalshi was "unaffected" by this failure mode; it wasn't. Kalshi's own watchlist includes live, in-progress sports markets that can spike on a single dramatic moment the same way a live tennis match did on Polymarket. Fixed to check Kalshi's actual settlement `result` field instead of inferring it from price — confirmed against Kalshi's live API before shipping. All previously-resolved Kalshi outcomes (a small number, since the platform had barely been producing any) were reset and left to re-resolve correctly.
+
+**Where this leaves Kalshi:** detection and resolution are now trustworthy, and every signal above a small noise floor is being saved for research — the same "collect broadly, find the edge empirically" approach that worked for Polymarket, rather than guessing at per-market thresholds up front. No price-bucket edge analysis has been run on Kalshi data yet, and Kalshi's market structure (regulated, USD-denominated, no trader-consensus mechanism, a different mix of macro vs. sports markets) means the Polymarket findings above don't necessarily carry over. That's an open question, not an assumption either way.
+
+---
+
 ## Features
 
 - **Real-time consensus tracking** — monitors top 100 Polymarket traders by monthly PnL, detects when 3+ independent accounts converge on the same position
@@ -187,7 +201,7 @@ Actively developed and running in production. The core edge-finding phase is com
 - [ ] Time-to-resolution analysis on corrected, unbiased data (the field needed for this, `hours_to_close`, was itself found and fixed mid-project)
 - [ ] Trader-identity analysis — do specific top traders predict edge independent of consensus count (already shown *not* to matter on its own)
 - [ ] Repricing/drift analysis using `signal_price_history` — does price move toward fair value shortly after a fresh signal, enabling an early-exit strategy
-- [x] ~~Kalshi signal volume investigation (currently near-zero over two months)~~ — diagnosed and fixed: the previous-price comparison was rebuilt fresh on every scan, so `detect_move()` could never actually compare anything. Kalshi now detects real signals; next step is accumulating enough resolved outcomes to run the same price-bucket edge analysis already done for Polymarket.
+- [x] ~~Kalshi signal volume investigation (currently near-zero over two months)~~ — diagnosed and fixed, see [Kalshi: The Same Audit Discipline, Applied a Second Time](#kalshi-the-same-audit-discipline-applied-a-second-time). Next step: accumulate enough resolved outcomes to run the same price-bucket edge analysis already done for Polymarket.
 
 ---
 
