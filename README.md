@@ -59,6 +59,9 @@ Rather than trust the corrected backtest alone, every signal that clears the val
 ![Live signal example](screenshot-signals.png)
 *A live PRIME signal: consensus %, momentum since entry, and upside remaining, surfaced the moment 3+ top traders converge on the same side.*
 
+![Kalshi signal example](screenshot-kalshi.png)
+*Kalshi order-flow detection, live: a Nasdaq-100 index contract flagged STRONG BUY off a large, fast move with real order depth behind it.*
+
 ---
 
 ## Tech Stack
@@ -182,7 +185,7 @@ Actively developed and running in production. The core edge-finding phase is com
 - [ ] Time-to-resolution analysis on corrected, unbiased data (the field needed for this, `hours_to_close`, was itself found and fixed mid-project)
 - [ ] Trader-identity analysis — do specific top traders predict edge independent of consensus count (already shown *not* to matter on its own)
 - [ ] Repricing/drift analysis using `signal_price_history` — does price move toward fair value shortly after a fresh signal, enabling an early-exit strategy
-- [ ] Kalshi signal volume investigation (currently near-zero over two months — likely a threshold or coverage issue, not yet diagnosed)
+- [x] ~~Kalshi signal volume investigation (currently near-zero over two months)~~ — diagnosed and fixed: the previous-price comparison was rebuilt fresh on every scan, so `detect_move()` could never actually compare anything. Kalshi now detects real signals; next step is accumulating enough resolved outcomes to run the same price-bucket edge analysis already done for Polymarket.
 
 ---
 
