@@ -56,7 +56,7 @@ Fixed by moving that memory to persist across scans instead of resetting each ti
 
 **A second bug, found while checking whether the fix could be trusted:** before treating any of Kalshi's new signal volume as reliable, its outcome-resolution logic got the same scrutiny that had already caught a major bug on the Polymarket side. It turned out to have the *exact same* flaw — a price crossing 95¢ or 5¢ was being treated as proof a market had closed, with no check on whether it actually had. A code comment nearby claimed Kalshi was "unaffected" by this failure mode; it wasn't. Kalshi's own watchlist includes live, in-progress sports markets that can spike on a single dramatic moment the same way a live tennis match did on Polymarket. Fixed to check Kalshi's actual settlement `result` field instead of inferring it from price — confirmed against Kalshi's live API before shipping. All previously-resolved Kalshi outcomes (a small number, since the platform had barely been producing any) were reset and left to re-resolve correctly.
 
-**Where this leaves Kalshi:** detection and resolution are now trustworthy, and every signal above a small noise floor is being saved for research — the same "collect broadly, find the edge empirically" approach that worked for Polymarket, rather than guessing at per-market thresholds up front. No price-bucket edge analysis has been run on Kalshi data yet, and Kalshi's market structure (regulated, USD-denominated, no trader-consensus mechanism, a different mix of macro vs. sports markets) means the Polymarket findings above don't necessarily carry over. That's an open question, not an assumption either way.
+**Where this leaves Kalshi:** detection and resolution are now trustworthy, and every signal above a small noise floor (0.5¢ move, $100 depth — see [Signal Logic](#signal-logic) for how this differs from the alert threshold) is being saved for research — the same "collect broadly, find the edge empirically" approach that worked for Polymarket, rather than guessing at per-market thresholds up front. No price-bucket edge analysis has been run on Kalshi data yet, and Kalshi's market structure (regulated, USD-denominated, no trader-consensus mechanism, a different mix of macro vs. sports markets) means the Polymarket findings above don't necessarily carry over. That's an open question, not an assumption either way.
 
 ---
 
@@ -143,7 +143,9 @@ Pulls the top 100 traders by monthly PnL. For each market: trader count, rank-we
 A signal resolves WON/LOST only when Polymarket's own `closed` flag confirms the market has actually settled — checked via CLOB, with Gamma as fallback — matched against the specific outcome name the signal was on. Price alone is never used as a resolution proxy; an earlier version of this logic did use a price threshold and was the source of the 53% mislabeling bug described above.
 
 ### Kalshi — Order Flow
-Triggers when YES price moves ≥3¢ with order depth ≥$1,000 in a single scan cycle.
+**Research collection:** every real price tick above a small noise floor — ≥0.5¢ move, ≥$100 depth — gets saved to the database, regardless of whether it's alert-worthy. Same "collect broadly, find the edge empirically" approach used for Polymarket, rather than guessing at per-market thresholds up front.
+
+**Alerting:** surfaces only moves ≥3¢ with depth ≥$1,000 in a single scan cycle. These are the original, untuned production thresholds — kept as-is deliberately while enough data accumulates under the broader collection floor to eventually tighten them with evidence, the same way Polymarket's price cap was tightened from 80¢ to 35¢ once the edge analysis actually supported it.
 
 ---
 
