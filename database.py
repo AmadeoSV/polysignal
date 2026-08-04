@@ -308,6 +308,22 @@ def db_analytics() -> dict:
             by_platform[t.platform]["trades"]+=1
             by_platform[t.platform]["pnl"]+=t.pnl or 0
 
+        # Kalshi's raw signal count blends real, alert-worthy signals with
+        # sub-threshold broad-capture data (saved for research since the
+        # Aug 2 fix) -- a distinction Polymarket's count doesn't have, since
+        # every Polymarket signal has always cleared the same real filter.
+        # Showing "1108" next to Polymarket's "6670" as directly comparable
+        # numbers was misleading. These thresholds match kalshi.py's own
+        # alert-gate defaults -- keep in sync if those ever change.
+        KALSHI_ALERT_MIN_MOVE, KALSHI_ALERT_MIN_DEPTH = 0.03, 1000.0
+        if "kalshi" in by_platform:
+            kalshi_alert_worthy = s.query(func.count(Signal.id)).filter(
+                Signal.platform == "kalshi",
+                func.abs(Signal.move_size) >= KALSHI_ALERT_MIN_MOVE,
+                Signal.depth >= KALSHI_ALERT_MIN_DEPTH,
+            ).scalar() or 0
+            by_platform["kalshi"]["alert_worthy"] = kalshi_alert_worthy
+
         recent = sorted(closed, key=lambda t: t.exit_time or datetime.min)[-30:]
         cum, pnl_series = 0, []
         for t in recent:
