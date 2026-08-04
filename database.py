@@ -140,6 +140,7 @@ def _run_migrations():
         "ALTER TABLE signal_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
         "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
         "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS market_slug VARCHAR",
+        "ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS tier VARCHAR",
     ]
     with engine.connect() as conn:
         for sql in migrations:
@@ -502,17 +503,26 @@ class TraderPriceHistory(Base):
 
 class PaperTrade(Base):
     """
-    Hypothetical, no-money position logged automatically for every PRIME
-    signal (fresh, <=35c) that actually gets alerted. Fixed $5 stake per
-    trade. Lets the corrected system build a real forward track record
-    while a live capital decision waits on the person's own timeline —
-    separate from, and not blocking, further data collection.
+    Hypothetical, no-money position logged automatically for every
+    Polymarket signal that clears the <=35c filter — both PRIME (fresh,
+    <2c moved) and STANDARD (moved 2c+) tiers, tagged separately via
+    `tier`. Fixed $5 stake per trade.
+
+    Originally PRIME-only, based on an earlier finding that PRIME had
+    the real edge (+16.1c) and STANDARD didn't (-2.1c). A later,
+    larger-sample retrospective check (n=687 distinct markets, stable
+    across two separate time windows) found the opposite — STANDARD
+    showing +19.0c and PRIME roughly flat. Rather than trust either
+    retrospective number outright, both tiers are now paper-traded
+    forward in parallel, so the live data — not another backward-
+    looking query — settles which tier actually has the edge.
     """
     __tablename__ = "paper_trades"
     id                  = Column(Integer, primary_key=True)
     signal_id           = Column(Integer, index=True)
     platform_signal_id  = Column(String, index=True)
     market_title        = Column(Text)
+    tier                = Column(String, default="PRIME")  # "PRIME" or "STANDARD"
     entry_price         = Column(Float)
     stake               = Column(Float, default=5.0)
     shares              = Column(Float)
@@ -536,6 +546,7 @@ def _run_migrations():
         "ALTER TABLE signal_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
         "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
         "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS market_slug VARCHAR",
+        "ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS tier VARCHAR",
     ]
     with engine.connect() as conn:
         for sql in migrations:
@@ -563,8 +574,8 @@ def db_init_signal_price_history(signal_id: int, ticker: str, platform: str,
 
 
 def db_log_paper_trade(signal_id: int, platform_signal_id: str, title: str,
-                        entry_price: float, stake: float = 5.0):
-    """Log a hypothetical PRIME-tier position. No real money involved."""
+                        entry_price: float, stake: float = 5.0, tier: str = "PRIME"):
+    """Log a hypothetical position for the given tier. No real money involved."""
     if not entry_price or entry_price <= 0:
         return
     with Session(engine) as s:
@@ -573,7 +584,7 @@ def db_log_paper_trade(signal_id: int, platform_signal_id: str, title: str,
             return
         s.add(PaperTrade(
             signal_id=signal_id, platform_signal_id=platform_signal_id,
-            market_title=title, entry_price=entry_price, stake=stake,
+            market_title=title, tier=tier, entry_price=entry_price, stake=stake,
             shares=stake / entry_price,
         ))
         s.commit()
@@ -601,11 +612,21 @@ def db_resolve_paper_trades():
         return len(pending)
 
 
-def db_paper_trade_stats() -> dict:
-    """Summary stats for the paper trading dashboard card."""
+def db_paper_trade_stats(tier: str = "PRIME") -> dict:
+    """
+    Summary stats for the paper trading dashboard card. Defaults to
+    PRIME to preserve existing behavior at every current call site —
+    pass tier='STANDARD' explicitly to get the other track, or
+    tier=None for both combined (rarely what you want, since the whole
+    point of tracking them separately is to compare them, not blend
+    them back together).
+    """
     with Session(engine) as s:
-        resolved = s.query(PaperTrade).filter(PaperTrade.outcome != None).all()
-        pending  = s.query(func.count(PaperTrade.id)).filter(PaperTrade.outcome == None).scalar() or 0
+        q = s.query(PaperTrade)
+        if tier:
+            q = q.filter(PaperTrade.tier == tier)
+        resolved = q.filter(PaperTrade.outcome != None).all()
+        pending  = q.filter(PaperTrade.outcome == None).count()
         won      = [t for t in resolved if t.outcome == "WON"]
         total_pnl = sum(t.pnl or 0 for t in resolved)
 
@@ -622,6 +643,7 @@ def db_paper_trade_stats() -> dict:
             })
 
         return {
+            "tier":       tier or "ALL",
             "resolved":   len(resolved),
             "pending":    pending,
             "won":        len(won),

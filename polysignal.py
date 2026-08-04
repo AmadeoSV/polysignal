@@ -432,7 +432,9 @@ def api_analytics():
 @requires_auth
 def api_paper_trades():
     from database import db_paper_trade_stats
-    return jsonify(db_paper_trade_stats())
+    prime = db_paper_trade_stats("PRIME")
+    prime["standard"] = db_paper_trade_stats("STANDARD")
+    return jsonify(prime)
 
 @app.route("/api/scan_now", methods=["POST"])
 @requires_auth
@@ -1052,13 +1054,20 @@ function renderAnalytics() {
     : '<span style="font-size:13px;color:var(--muted)">Accumulating\u2026</span>';
 
   // ZONE 1 -- Live validation: the actual thing being tested right now.
-  let html=`<div class="sec-title">\u{1f3af} Live validation \u2014 PRIME paper trading</div>
+  const std = paperTrades.standard || {};
+  let html=`<div class="sec-title">\u{1f3af} Live validation \u2014 PRIME vs STANDARD, running in parallel</div>
   <div class="agrid">
     <div class="scard" style="grid-column:span 4">
       <div class="sv" style="color:var(--amber);font-size:16px">
         ${paperTrades.resolved ? `${paperTrades.win_rate}% (${paperTrades.won}W/${paperTrades.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(paperTrades.total_pnl)}">${pnlS(paperTrades.total_pnl)}</span> on $${paperTrades.total_staked} staked &nbsp; | &nbsp; ${paperTrades.pending||0} pending` : `Accumulating\u2026 (${paperTrades.pending||0} pending)`}
       </div>
-      <div class="sl">$5/signal, no real money (started July 24) \u2014 this is the number that matters</div>
+      <div class="sl">PRIME (fresh, &lt;2c moved) \u2014 $5/signal, no real money, alerted on Telegram</div>
+    </div>
+    <div class="scard" style="grid-column:span 4">
+      <div class="sv" style="color:var(--blue);font-size:16px">
+        ${std.resolved ? `${std.win_rate}% (${std.won}W/${std.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(std.total_pnl)}">${pnlS(std.total_pnl)}</span> on $${std.total_staked} staked &nbsp; | &nbsp; ${std.pending||0} pending` : `Accumulating\u2026 (${std.pending||0} pending)`}
+      </div>
+      <div class="sl">STANDARD (moved 2c+) \u2014 $5/signal, no real money, logged but NOT alerted \u2014 started Aug 4, tracked to test whether a large retrospective re-check (STANDARD +19.0c vs PRIME roughly flat, n=687) holds up live</div>
     </div>
   </div>
   <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>

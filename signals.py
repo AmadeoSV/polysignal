@@ -278,13 +278,17 @@ def check_new_signals(rows: List[dict], platform: str):
         if not key or key in already_alerted:
             continue
 
-        # Only PRIME (fresh, <2c moved) signals get sent to Telegram now.
-        # After the outcome-audit fix and tightening to <=35c, re-running
-        # the freshness split on corrected data showed STANDARD (2c+
-        # moved) no longer has a real edge (-2.1c, essentially a coin
-        # flip) — only PRIME does (+16.1c, confirmed on 417 distinct
-        # markets). Still mark non-fresh signals as alerted so they're
-        # not re-evaluated every scan, just don't notify on them.
+        # PRIME (fresh, <2c moved) signals get sent to Telegram, same as
+        # before. STANDARD (moved 2c+) signals are still NOT alerted —
+        # but as of today, both tiers get paper-traded forward in
+        # parallel (tagged separately) rather than trusting either
+        # retrospective SQL analysis alone. The original split found
+        # PRIME +16.1c / STANDARD -2.1c (n=417/152); a later, 3x-larger,
+        # time-stable re-check found the opposite (PRIME roughly flat,
+        # STANDARD +19.0c, n=221/466). Rather than flip alerting based
+        # on a number that already reversed once, both tiers now build
+        # a live, honest, forward track record — that's what decides
+        # this, not another backward-looking query.
         if platform != "kalshi":
             momentum = r.get("momentum")
             if momentum is None:
@@ -298,6 +302,15 @@ def check_new_signals(rows: List[dict], platform: str):
                     pass
                 with _seen_lock:
                     _seen_signals.add(key)
+                if r.get("db_id"):
+                    try:
+                        from database import db_log_paper_trade
+                        db_log_paper_trade(
+                            r["db_id"], key, r.get("title", ""),
+                            r.get("curPrice", 0), tier="STANDARD"
+                        )
+                    except Exception as e:
+                        print(f"  STANDARD paper trade log failed for {key[:50]}: {e}")
                 continue
 
         url = r.get("url") or r.get("market_url", "")
@@ -315,15 +328,14 @@ def check_new_signals(rows: List[dict], platform: str):
 
             # Every alert that actually goes out from here forward is a
             # PRIME signal (the gate above already filtered). Log it as
-            # a hypothetical $5 position, no real money, so there's a
-            # live forward track record building while any real capital
-            # decision waits on its own timeline.
+            # a hypothetical $5 position, no real money, tagged PRIME so
+            # it stays comparable to the STANDARD track logged above.
             if platform != "kalshi" and r.get("db_id"):
                 try:
                     from database import db_log_paper_trade
                     db_log_paper_trade(
                         r["db_id"], key, r.get("title", ""),
-                        r.get("curPrice", 0)
+                        r.get("curPrice", 0), tier="PRIME"
                     )
                 except Exception as e:
                     print(f"  Paper trade log failed for {key[:50]}: {e}")
