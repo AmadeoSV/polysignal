@@ -1082,9 +1082,13 @@ function renderAnalytics() {
   if(a.by_platform&&Object.keys(a.by_platform).length){
     html+=`<div class="pgrid">`;
     Object.entries(a.by_platform).forEach(([plat,d])=>{
+      const alertLine = (plat==='kalshi' && d.alert_worthy!==undefined)
+        ? `<div style="font-size:11px;color:var(--muted)">of which alert-worthy: <b style="color:var(--amber)">${d.alert_worthy}</b> <span style="opacity:.7">(rest is broad-capture research data)</span></div>`
+        : '';
       html+=`<div class="pcard">
         <div class="pcard-title">${plat.toUpperCase()}</div>
         <div style="font-size:12px;color:var(--muted)">Signals: <b style="color:var(--text)">${d.signals}</b></div>
+        ${alertLine}
         <div style="font-size:12px;color:var(--muted)">Trades: <b style="color:var(--text)">${d.trades}</b></div>
         <div style="font-size:12px;color:var(--muted)">PnL: <b style="color:${pnlC(d.pnl)}">${pnlS(d.pnl)}</b></div>
       </div>`;
@@ -1131,6 +1135,7 @@ function initCharts() {
         {label:'Kalshi',data:a.signals_by_day.map(d=>d.kalshi),backgroundColor:'rgba(168,85,247,.7)',borderRadius:3}
       ]
     },options:{...opts,
+      interaction:{mode:'index',intersect:false},
       plugins:{...opts.plugins,legend:{display:true,labels:{color:'#7a7a8a',font:{size:10}}},title:{display:true,text:'Signals per day',color:'#7a7a8a',font:{size:12}}},
       scales:{x:{...opts.scales.x,stacked:true},y:{...opts.scales.y,stacked:true}}
     }});
