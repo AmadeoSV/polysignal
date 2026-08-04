@@ -1126,13 +1126,35 @@ function initCharts() {
     plugins:{legend:{display:false}},
     scales:{x:{ticks:{color:'#7a7a8a',font:{size:10}}},y:{ticks:{color:'#7a7a8a',font:{size:10}}}}};
   const pnlEl=document.getElementById('pnl-chart');
+  const stdSeries = (paperTrades.standard && paperTrades.standard.pnl_series) || [];
   if(pnlEl&&paperTrades.pnl_series&&paperTrades.pnl_series.length){
     if(charts.pnl) charts.pnl.destroy();
+    // PRIME and STANDARD resolve on different dates at different rates --
+    // can't just reuse PRIME's date list as the x-axis for both lines,
+    // that would silently misalign STANDARD's points once it has more
+    // than a couple. Build one shared, sorted date axis and forward-fill
+    // each series' last known cumulative value onto it instead.
+    const allDates=[...new Set([...paperTrades.pnl_series.map(p=>p.date), ...stdSeries.map(p=>p.date)])].sort();
+    const fillOnto=(series,dates)=>{
+      let last=0, out=[], i=0;
+      for(const d of dates){
+        while(i<series.length && series[i].date<=d){ last=series[i].pnl; i++; }
+        out.push(last);
+      }
+      return out;
+    };
+    const datasets=[{label:'PRIME',data:fillOnto(paperTrades.pnl_series,allDates),borderColor:'#22c55e',
+      backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:.4,pointRadius:2}];
+    if(stdSeries.length){
+      datasets.push({label:'STANDARD',data:fillOnto(stdSeries,allDates),borderColor:'#3b82f6',
+        backgroundColor:'rgba(59,130,246,.1)',fill:true,tension:.4,pointRadius:2});
+    }
     charts.pnl=new Chart(pnlEl,{type:'line',data:{
-      labels:paperTrades.pnl_series.map(p=>p.date),
-      datasets:[{data:paperTrades.pnl_series.map(p=>p.pnl),borderColor:'#22c55e',
-        backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:.4,pointRadius:2}]
-    },options:{...opts,plugins:{...opts.plugins,title:{display:true,text:'PRIME Paper Trading — Cumulative PnL ($)',color:'#7a7a8a',font:{size:12}}}}});
+      labels:allDates,
+      datasets:datasets
+    },options:{...opts,
+      plugins:{...opts.plugins,legend:{display:stdSeries.length>0,labels:{color:'#7a7a8a',font:{size:10}}},title:{display:true,text:stdSeries.length?'PRIME vs STANDARD — Cumulative PnL ($)':'PRIME Paper Trading — Cumulative PnL ($)',color:'#7a7a8a',font:{size:12}}}
+    }});
   }
   const sigEl=document.getElementById('sig-chart');
   if(sigEl&&a.signals_by_day&&a.signals_by_day.length){
