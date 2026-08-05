@@ -29,7 +29,8 @@ def tg_send(text: str, chat_id: str="", buttons=None):
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
             json=payload, timeout=10
         )
-    except: pass
+    except Exception as e:
+        print(f"tg_send failed: {e}")
 
 
 def tg_get_updates() -> List[dict]:
@@ -491,5 +492,6 @@ def poll_loop(state_ref: dict, handle_cmd_fn):
                         args=(msg["text"], str(msg["chat"]["id"])),
                         daemon=True
                     ).start()
-        except: pass
+        except Exception as e:
+            print(f"poll_loop tick failed: {e}")
         time.sleep(1)

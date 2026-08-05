@@ -104,7 +104,8 @@ def fetch_market_status(ticker: str) -> Optional[dict]:
     try:
         m = get_json(f"{KALSHI_API}/markets/{ticker}").get("market", {})
         return {"status": m.get("status", ""), "result": m.get("result", "")}
-    except:
+    except Exception as e:
+        print(f"fetch_market_status failed for {ticker}: {e}")
         return None
 
 
@@ -135,7 +136,8 @@ def fetch_markets() -> List[dict]:
                 t = m.get("ticker","")
                 if t and t not in seen:
                     seen.add(t); all_m.append(m)
-        except: pass
+        except Exception as e:
+            print(f"fetch_markets failed for series {series}: {e}")
         time.sleep(0.1)
     return all_m[:MAX_MARKETS]
 
