@@ -54,6 +54,90 @@ def is_live_sports_ticker(ticker: str) -> bool:
     return any(ticker.startswith(series) for series in LIVE_SPORTS_SERIES)
 
 
+# ── Category ──────────────────────────────────────────────────────────────────
+# market.get("category","") on the /markets response is always "" — Kalshi
+# removed `category` from Market responses (confirmed against current API
+# docs); every pending signal in the DB has category="" as a result. The
+# real, authoritative category field still exists, just one level up, on
+# the Series object (GET /series/{ticker}) and the Event object. Since
+# fetch_markets() already loops one series at a time, we only need to look
+# each series's category up once and cache it — 47 series total, so this
+# is a handful of extra calls at most, not one per market.
+#
+# Ticker-prefix guessing is kept only as a fallback for the rare case the
+# API call itself fails (network blip, series renamed) — real data first,
+# heuristic second, never silently blank again.
+#
+# Category NAMES below were corrected against a real, live call to
+# GET https://external-api.kalshi.com/trade-api/v2/series (checked
+# 2026-08-05) rather than assumed. Kalshi's real taxonomy splits things
+# this fallback originally lumped together — confirmed real examples:
+# KXEARNINGSMENTIONCOST -> "Mentions" (not "economics"), and Politics/
+# Elections are two separate categories, not one. This fallback exists
+# only so a transient API failure can't reintroduce a blank category —
+# get_series_category() always tries the real API first.
+_series_category_cache: Dict[str, str] = {}
+
+_CATEGORY_PREFIX_FALLBACK: List[Tuple[str, Tuple[str, ...]]] = [
+    ("sports", (
+        "KXNBA", "KXNHL", "KXNFL", "KXMLB", "KXATP", "KXWTP",
+        "KXNCAA", "KXSOCCER", "KXUFC", "KXGOLF", "KXTENNIS",
+    )),
+    ("crypto", (
+        "KXBTC", "KXETH", "KXSOL", "KXDOGE", "BTC", "ETH",
+    )),
+    ("financials", (
+        "KXWTI", "KXOIL", "KXBRENT", "KXGOLD", "KXNATGAS", "KXSILVER",
+        "KXFX", "KXJPY", "KXGBP", "KXEURO", "KXEUR", "KXCAD", "KXAUD",
+        "KXNASDAQ", "KXSPX", "KXDOW",
+    )),
+    ("mentions", (
+        "KXEARNINGSMENTION",
+    )),
+    ("elections", (
+        "KXPRES", "KXSENATE", "KXHOUSE", "KXCONGRESS", "KXPRIMARY",
+    )),
+    ("politics", (
+        "KXGOV", "KXELECTION", "KXSPEAKER",
+    )),
+    ("economics", (
+        "KXFEDDECISION", "KXRATECUT", "KXRATEHIKE", "KXFEDHIKE",
+        "KXTERMINALRATE", "KXFEDRATEMIN", "KXCPI", "KXPCE", "KXGDP",
+        "KXPAYROLLS", "KXNFPDELAY", "KXUNEMPLOYMENT", "KXJOBLESS",
+    )),
+]
+
+
+def _infer_category_fallback(ticker: str) -> str:
+    t = (ticker or "").upper()
+    for category, prefixes in _CATEGORY_PREFIX_FALLBACK:
+        for prefix in sorted(prefixes, key=len, reverse=True):
+            if t.startswith(prefix):
+                return category
+    return "other"
+
+
+def get_series_category(series: str) -> str:
+    """
+    Real category for a series ticker, straight from Kalshi's own Series
+    object — cached after the first lookup since a series's category
+    doesn't change. Falls back to ticker-prefix guessing only if the API
+    call itself fails, so a transient network error can't silently
+    reintroduce blank categories.
+    """
+    if series in _series_category_cache:
+        return _series_category_cache[series]
+    try:
+        data = get_json(f"{KALSHI_API}/series/{series}")
+        cat = (data.get("series") or {}).get("category") or ""
+        cat = cat.strip().lower() if cat else _infer_category_fallback(series)
+    except Exception as e:
+        print(f"get_series_category failed for {series}: {e}")
+        cat = _infer_category_fallback(series)
+    _series_category_cache[series] = cat
+    return cat
+
+
 # Capture floor — the bar for saving a price move to the DB at all.
 # Deliberately much lower than any alert threshold: the goal right now is
 # broad data collection to empirically find where real signal lives, the
@@ -130,11 +214,13 @@ def fetch_markets() -> List[dict]:
     for series in WATCHED_SERIES:
         if len(all_m) >= MAX_MARKETS: break
         try:
+            category = get_series_category(series)  # cached after first call per series
             data = get_json(f"{KALSHI_API}/markets",
                             params={"limit":20,"status":"open","series_ticker":series})
             for m in data.get("markets",[]):
                 t = m.get("ticker","")
                 if t and t not in seen:
+                    m["_category"] = category  # tag now, /markets itself has no category field
                     seen.add(t); all_m.append(m)
         except Exception as e:
             print(f"fetch_markets failed for series {series}: {e}")
@@ -170,7 +256,7 @@ def detect_move(ticker: str, market: dict, ob: dict,
     return {
         "ticker":     ticker,
         "title":      market.get("title") or ticker,
-        "category":   market.get("category",""),
+        "category":   market.get("_category") or _infer_category_fallback(ticker),
         "direction":  "UP" if move > 0 else "DOWN",
         "prev_price": round(prev_price, 4),
         "cur_price":  round(cur, 4),
