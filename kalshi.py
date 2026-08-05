@@ -10,9 +10,22 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 KALSHI_API  = "https://external-api.kalshi.com/trade-api/v2"
-MAX_MARKETS = 200
+MAX_MARKETS = 300  # was 200 -- raised alongside reordering WATCHED_SERIES
+                    # (sports moved to front) so the cap-starvation issue
+                    # doesn't just shift onto whatever's now near the
+                    # bottom of the list instead of sports.
 
 WATCHED_SERIES = [
+    # Sports first -- these resolve within hours/days, unlike most of the
+    # macro series below which can take months. Previously listed last
+    # out of 48 series; MAX_MARKETS=200 combined with how many bracket/
+    # threshold sub-markets the macro series (esp. Nasdaq, BTC) produce
+    # per event meant the fetch loop was very likely hitting the cap and
+    # breaking before ever reaching a single sports series -- confirmed
+    # zero KXMLBGAME signals ever, despite real, liquid MLB markets
+    # existing (checked directly against Kalshi's live API).
+    "KXNBAGAME","KXNBAFINALS","KXNHLGAME","KXNHLSTANCUP",
+    "KXNFLGAME","KXMLBGAME","KXATPGAME","KXWTPGAME",
     "KXFEDDECISION","KXRATECUT","KXRATECUTS","KXRATEHIKE","KXFEDHIKE",
     "KXTERMINALRATE","KXFEDRATEMIN","KXCPI","KXCPIYOY","KXCPICORE",
     "KXCPICOREYOY","KXPCECORE","KXGDP","KXPAYROLLS","KXNFPDELAY",
@@ -23,8 +36,6 @@ WATCHED_SERIES = [
     "KXEARNINGSMENTIONMSFT","KXEARNINGSMENTIONMETA","KXEARNINGSMENTIONAMZN",
     "KXEARNINGSMENTIONJPM","KXEARNINGSMENTIONGOOGL",
     "KXFXEURO","KXJPY","KXGBP",
-    "KXNBAGAME","KXNBAFINALS","KXNHLGAME","KXNHLSTANCUP",
-    "KXNFLGAME","KXMLBGAME","KXATPGAME","KXWTPGAME",
 ]
 
 # Subset of WATCHED_SERIES that are live, in-progress sports games —
