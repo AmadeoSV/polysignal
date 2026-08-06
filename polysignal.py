@@ -1052,6 +1052,9 @@ function renderAnalytics() {
   const sigAccCleanKalshi = a.sig_accuracy_clean_kalshi !== null && a.sig_accuracy_clean_kalshi !== undefined
     ? `${a.sig_accuracy_clean_kalshi}% <span style="font-size:11px;color:var(--muted)">(${a.sig_won_clean_kalshi}W/${a.sig_lost_clean_kalshi}L)</span>`
     : '<span style="font-size:13px;color:var(--muted)">Accumulating\u2026</span>';
+  const sigAccKalshiDedup = a.sig_accuracy_kalshi_dedup !== null && a.sig_accuracy_kalshi_dedup !== undefined
+    ? `${a.sig_accuracy_kalshi_dedup}% <span style="font-size:11px;color:var(--muted)">(${a.sig_won_kalshi_dedup}W/${a.sig_lost_kalshi_dedup}L, ${a.sig_pending_kalshi_dedup||0} pending)</span>`
+    : '<span style="font-size:13px;color:var(--muted)">Accumulating\u2026</span>';
 
   // ZONE 1 -- Live validation: the actual thing being tested right now.
   const std = paperTrades.standard || {};
@@ -1076,7 +1079,8 @@ function renderAnalytics() {
   <div class="agrid">
     <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--purple);font-size:16px">${sigAcc}</div><div class="sl">All-time (unfiltered, includes pre-fix history)</div></div>
     <div class="scard" style="grid-column:span 2"><div class="sv" style="color:var(--green);font-size:16px">${sigAccClean}</div><div class="sl">Polymarket \u2014 since July 24 filter fix</div></div>
-    <div class="scard" style="grid-column:span 4"><div class="sv" style="color:var(--green);font-size:16px">${sigAccCleanKalshi}</div><div class="sl">Kalshi \u2014 since Aug 2 resolution fix</div></div>
+    <div class="scard" style="grid-column:span 4"><div class="sv" style="color:var(--green);font-size:16px">${sigAccCleanKalshi}</div><div class="sl">Kalshi \u2014 since Aug 2 resolution fix (raw signal rows \u2014 a market re-firing many times counts many times)</div></div>
+    <div class="scard" style="grid-column:span 4"><div class="sv" style="color:var(--amber);font-size:16px">${sigAccKalshiDedup}</div><div class="sl">Kalshi \u2014 deduplicated, distinct markets only (one row per ticker+direction, earliest detection) \u2014 use this one, not the raw tile above</div></div>
   </div>
 
   <div class="sec-title" style="margin-top:18px">\u{1f4ca} Volume & background</div>

@@ -297,6 +297,44 @@ def db_analytics() -> dict:
             if (won_clean_kalshi+lost_clean_kalshi) else None
         )
 
+        # The stat above counts raw signal rows, not distinct markets — a
+        # single Kalshi market can fire dozens of repeat signals as price
+        # ticks toward resolution (confirmed by hand: 1,142 raw resolved
+        # rows collapse to 64 distinct markets, an ~18x duplication rate).
+        # If markets that resolve WON happen to re-fire at a different
+        # rate than ones that resolve LOST, the raw win/lost counts above
+        # are biased relative to the true per-market rate — in either
+        # direction, not necessarily favorably. This is the deduplicated
+        # version: one row per distinct (ticker, signal_type), keeping the
+        # earliest detection, same method validated by hand against the
+        # live DB before trusting it. ROW_NUMBER() over ORDER BY works on
+        # both SQLite and Postgres, unlike DISTINCT ON (Postgres-only).
+        from sqlalchemy import text as _sql_text
+        _dedup_rows = s.execute(_sql_text("""
+            SELECT outcome, COUNT(*) AS n
+            FROM (
+                SELECT outcome,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY ticker, signal_type
+                           ORDER BY detected_at ASC
+                       ) AS rn
+                FROM signals
+                WHERE platform = 'kalshi' AND signal_type IN ('UP','DOWN')
+            ) t
+            WHERE rn = 1
+            GROUP BY outcome
+        """)).fetchall()
+        won_kalshi_dedup = lost_kalshi_dedup = pending_kalshi_dedup = 0
+        for _outcome, _n in _dedup_rows:
+            if _outcome == "WON": won_kalshi_dedup = _n
+            elif _outcome == "LOST": lost_kalshi_dedup = _n
+            else: pending_kalshi_dedup = _n
+        _resolved_kalshi_dedup = won_kalshi_dedup + lost_kalshi_dedup
+        sig_accuracy_kalshi_dedup = (
+            round(won_kalshi_dedup/_resolved_kalshi_dedup*100,1)
+            if _resolved_kalshi_dedup else None
+        )
+
         by_strat = defaultdict(lambda:{"count":0,"pnl":0,"wins":0})
         for t in closed:
             k = t.strategy_tag or "untagged"
@@ -366,6 +404,10 @@ def db_analytics() -> dict:
             "sig_accuracy_clean_kalshi": sig_accuracy_clean_kalshi,
             "sig_won_clean_kalshi":      won_clean_kalshi,
             "sig_lost_clean_kalshi":     lost_clean_kalshi,
+            "sig_accuracy_kalshi_dedup": sig_accuracy_kalshi_dedup,
+            "sig_won_kalshi_dedup":      won_kalshi_dedup,
+            "sig_lost_kalshi_dedup":     lost_kalshi_dedup,
+            "sig_pending_kalshi_dedup":  pending_kalshi_dedup,
             "by_strategy":    {k: {**v, "win_rate": round(v["wins"]/v["count"]*100,1)
                                if v["count"] else 0} for k,v in by_strat.items()},
             "by_platform":    dict(by_platform),
