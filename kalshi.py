@@ -162,7 +162,21 @@ def get_json(url: str, params=None, retries=3, pause=0.7):
             r = requests.get(url, params={k:v for k,v in (params or {}).items()
                                           if v is not None},
                              headers={"Accept":"application/json"}, timeout=20)
-            if r.status_code == 429: time.sleep(pause*(attempt+2)); continue
+            if r.status_code == 429:
+                # Was time.sleep(...); continue with no assignment to
+                # `last` -- meant every 429-exhausted call reported the
+                # confusing, wrong message "failed: None" instead of
+                # what actually happened (rate limited), which is what
+                # every "fetch_market_status failed for X: ... failed:
+                # None" line in the logs turned out to be. Also switched
+                # to real exponential backoff (2**attempt seconds) per
+                # Kalshi's own documented guidance -- the previous mild
+                # linear backoff (1.4s/2.1s/2.8s) wasn't enough once the
+                # resolution-check backlog grew large enough to sustain
+                # real 429s across a cycle.
+                last = RuntimeError(f"429 rate limited (attempt {attempt+1}/{retries})")
+                time.sleep(2 ** attempt)
+                continue
             r.raise_for_status(); return r.json()
         except Exception as e:
             last = e; time.sleep(pause*(attempt+1))
@@ -172,7 +186,9 @@ def get_json(url: str, params=None, retries=3, pause=0.7):
 def fetch_orderbook(ticker: str) -> Optional[dict]:
     try:
         return get_json(f"{KALSHI_API}/markets/{ticker}/orderbook").get("orderbook_fp")
-    except: return None
+    except Exception as e:
+        print(f"fetch_orderbook failed for {ticker}: {e}")
+        return None
 
 
 def fetch_market_status(ticker: str) -> Optional[dict]:

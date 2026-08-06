@@ -151,6 +151,17 @@ def run_kalshi_scan():
             ticker = m.get("ticker","")
             if not ticker: continue
             ob = kal.fetch_orderbook(ticker)
+            # Was zero delay between calls -- 150-230 orderbook fetches
+            # back-to-back every cycle, with no pacing at all. Combined
+            # with fetch_markets() and the resolution-check loop running
+            # in the same cycle, this was very likely the single biggest
+            # contributor to the 429 rate-limit storm found in the logs
+            # on 2026-08-06 (Kalshi's public tier allows ~20-30 req/s;
+            # this loop alone could burst well past that with zero gap).
+            # 0.08s keeps this loop under ~12/s on its own, leaving
+            # headroom for fetch_markets() and outcome-checking to share
+            # the same budget within a cycle.
+            time.sleep(0.08)
             if not ob: continue
             cur = kal.best_yes_price(ob)
             sig = kal.detect_move(ticker, m, ob, _kalshi_prev_prices.get(ticker),

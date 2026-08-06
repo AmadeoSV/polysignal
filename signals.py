@@ -541,10 +541,19 @@ def check_signal_outcomes(cfg=None):
     distinction Polymarket already makes via PaperTrade existence.
     """
     with Session(engine) as s:
+        # Was unbounded -- tried to check every pending signal every single
+        # cycle. Harmless when the backlog was small, but once it grew past
+        # a few thousand (5,900+ as of 2026-08-06), that's thousands of
+        # Kalshi API calls attempted back-to-back every cycle, which the
+        # logs confirmed was tripping real 429 rate limiting on both this
+        # loop AND fetch_markets() in the same cycle. Capped + ordered
+        # oldest-first so the backlog actually drains across cycles instead
+        # of the same huge batch being (mostly unsuccessfully) retried in
+        # full every time.
         pending = s.query(Signal).filter(
             Signal.outcome == None,
             Signal.detected_at >= datetime.utcnow() - timedelta(days=60)
-        ).all()
+        ).order_by(Signal.detected_at.asc()).limit(150).all()
         pending_data = [
             (p.id, p.platform, p.ticker, p.market_url, p.signal_type,
              p.market_title, p.platform_signal_id, p.move_size, p.depth)
@@ -555,7 +564,7 @@ def check_signal_outcomes(cfg=None):
     if not pending_data:
         return
 
-    print(f"Outcome check: {len(pending_data)} pending signals...")
+    print(f"Outcome check: {len(pending_data)} pending signals this batch...")
     resolved = 0
 
     for sig_id, platform, ticker, market_url, sig_type, title, sig_key, move_size, depth in pending_data:
