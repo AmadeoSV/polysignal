@@ -14,6 +14,12 @@ MAX_MARKETS = 300  # was 200 -- raised alongside reordering WATCHED_SERIES
                     # (sports moved to front) so the cap-starvation issue
                     # doesn't just shift onto whatever's now near the
                     # bottom of the list instead of sports.
+MAX_PER_SERIES = 80  # sub-cap added alongside pagination fix (see
+                      # fetch_markets) -- without this, a single busy
+                      # series fully paginating could eat the entire
+                      # MAX_MARKETS budget and starve every series after
+                      # it, the same failure mode WATCHED_SERIES was
+                      # reordered to fix, just from the opposite cause.
 
 WATCHED_SERIES = [
     # Sports first -- these resolve within hours/days, unlike most of the
@@ -231,13 +237,40 @@ def fetch_markets() -> List[dict]:
         if len(all_m) >= MAX_MARKETS: break
         try:
             category = get_series_category(series)  # cached after first call per series
-            data = get_json(f"{KALSHI_API}/markets",
-                            params={"limit":20,"status":"open","series_ticker":series})
-            for m in data.get("markets",[]):
-                t = m.get("ticker","")
-                if t and t not in seen:
-                    m["_category"] = category  # tag now, /markets itself has no category field
-                    seen.add(t); all_m.append(m)
+            # Was a single limit=20 call, no pagination -- /markets is
+            # cursor-paginated (confirmed against Kalshi's own docs) and
+            # a series with more than 20 open markets at once (a normal
+            # MLB slate is ~15 games x 2 tickers = ~30) silently lost
+            # everything past position 20, every cycle, forever. Confirmed
+            # concretely: a real, settled MLB game had zero rows in the
+            # signals table despite the series producing signals overall
+            # -- some games were never being fetched at all, not just
+            # slow to resolve. Now follows the cursor until either the
+            # series is exhausted or MAX_MARKETS is hit, same per-series
+            # cap logic as before, just no longer stopping at page one.
+            cursor = None
+            series_count = 0
+            for _ in range(10):  # hard ceiling so a bad cursor loop can't run forever
+                params = {"limit": 100, "status": "open", "series_ticker": series}
+                if cursor:
+                    params["cursor"] = cursor
+                data = get_json(f"{KALSHI_API}/markets", params=params)
+                for m in data.get("markets", []):
+                    t = m.get("ticker", "")
+                    if t and t not in seen:
+                        m["_category"] = category  # tag now, /markets itself has no category field
+                        seen.add(t); all_m.append(m); series_count += 1
+                cursor = data.get("cursor")
+                # Per-series sub-cap (comfortably above any single day's
+                # MLB+NFL slate) so full pagination on one busy series
+                # can't eat the entire MAX_MARKETS budget and starve
+                # everything listed after it -- the same failure mode
+                # WATCHED_SERIES was reordered to fix, just from a
+                # different cause (one series over-fetching instead of
+                # under-capped fetching stopping too early).
+                if not cursor or len(all_m) >= MAX_MARKETS or series_count >= MAX_PER_SERIES:
+                    break
+                time.sleep(0.1)
         except Exception as e:
             print(f"fetch_markets failed for series {series}: {e}")
         time.sleep(0.1)
