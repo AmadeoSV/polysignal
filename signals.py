@@ -556,7 +556,7 @@ def check_signal_outcomes(cfg=None):
         # instead of permanently starving the fast-resolving majority.
         pending = s.query(Signal).filter(
             Signal.outcome == None,
-            Signal.detected_at >= datetime.utcnow() - timedelta(days=60)
+            Signal.detected_at >= datetime.utcnow() - timedelta(days=400)
         ).order_by(_sql_func.random()).limit(150).all()
         pending_data = [
             (p.id, p.platform, p.ticker, p.market_url, p.signal_type,
