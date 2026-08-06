@@ -132,7 +132,8 @@ def _gamma_event_price(slug: str, market_title: str = "") -> Optional[float]:
         # return None rather than guessing wrong
         return None
 
-    except Exception:
+    except Exception as e:
+        print(f"_gamma_event_price failed: {e}")
         return None
 
 
@@ -169,7 +170,8 @@ def _clob_market_status(condition_id: str, outcome_name: str) -> Optional[dict]:
                 winner = bool(t.get("winner", False))
                 break
         return {"closed": closed, "winner": winner, "matched": winner is not None}
-    except Exception:
+    except Exception as e:
+        print(f"_clob_market_status failed for {condition_id}: {e}")
         return None
 
 
@@ -214,7 +216,8 @@ def _gamma_market_closed_status(condition_id: str, outcome_name: str = "") -> Op
                     winner = float(price) >= 0.5
                     break
         return {"closed": closed, "winner": winner, "matched": winner is not None}
-    except Exception:
+    except Exception as e:
+        print(f"_gamma_market_closed_status failed for {condition_id}: {e}")
         return None
 
 
@@ -247,7 +250,8 @@ def _gamma_market_price(slug: str) -> Optional[float]:
         if resp.status_code != 200:
             return None
         return _parse_outcome_price(resp.json().get("outcomePrices"))
-    except Exception:
+    except Exception as e:
+        print(f"_gamma_market_price failed for {slug}: {e}")
         return None
 
 
@@ -508,8 +512,8 @@ def update_open_trade_prices():
                     data = resp.json()
                     if data and data[0].get("curPrice"):
                         db_update_trade_price(tid, float(data[0]["curPrice"]))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"update_open_trade_prices failed for trade {tid}: {e}")
         time.sleep(0.3)
 
 

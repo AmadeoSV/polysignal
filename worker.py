@@ -220,7 +220,6 @@ def run_kalshi_scan():
         with _lock:
             _st["kalshi_signals"]  = new_sigs
             _st["last_kalshi"]     = utcnow_s()
-            _st["scanning_kalshi"] = False
             _st["scan_count"]     += 1
         print(f"Kalshi done — {len(new_sigs)} signals.")
         update_open_trade_prices()
@@ -236,6 +235,16 @@ def run_kalshi_scan():
         send_morning_brief(_st)
     except Exception as e:
         print(f"Kalshi scan error: {e}")
+    finally:
+        # Was cleared right after the market-scan loop, well before
+        # resolution-checking/cleanup/morning-brief ran -- meaning the
+        # scheduler's next 60s tick could start a whole new fetch cycle
+        # while this one was still mid-resolution-check, completely
+        # unguarded (the flag already said "not scanning" by then).
+        # Moved to a `finally` covering the entire function body instead,
+        # so the guard actually means what it says for as long as this
+        # run is doing anything at all -- fetching, resolving, or
+        # cleaning up.
         with _lock: _st["scanning_kalshi"] = False
 
 
