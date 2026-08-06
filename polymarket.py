@@ -13,6 +13,61 @@ import requests
 POLY_API       = "https://data-api.polymarket.com"
 POLY_GAMMA_API = "https://gamma-api.polymarket.com"
 
+# ── Category ──────────────────────────────────────────────────────────────────
+# Polymarket signals have never had a category at all -- confirmed against
+# the live DB: 100% of 6,715+ Polymarket signals have category="". Unlike
+# Kalshi (where the field existed and silently broke), Polymarket's code
+# simply never fetched one. The real data exists as "tags" on the Event
+# object (not the Market object) -- GET /events/slug/{slug} -- verified
+# live against the Gamma API: a real event returns tags like
+# [{"label":"Sports"},{"label":"MLB"},{"label":"baseball"}], mixing one
+# broad top-level category with more specific sub-tags in the same list.
+# Cached per event slug since a small number of distinct events cover a
+# large number of signals (many traders, same event, many times).
+_event_category_cache: Dict[str, str] = {}
+
+# Real top-level tag labels, confirmed against a live API response plus
+# Polymarket's own published category list (docs.polymarket.com, the
+# safe-wallet-integration reference, and a direct /events?tag_id= call
+# tested 2026-08-06). Matched case-insensitively against every tag on an
+# event; the first match is the broad category. Sub-tags like "MLB" or
+# "baseball" are real but more specific than we want as the top-level
+# bucket, so they're intentionally excluded from this set.
+_TOP_LEVEL_TAG_LABELS = {
+    "politics", "elections", "geopolitics", "sports", "crypto",
+    "finance", "business", "tech", "technology",
+    "science and technology", "culture", "pop culture",
+    "entertainment", "world",
+}
+
+
+def get_event_category(event_slug: str) -> str:
+    """
+    Real category for a Polymarket event, straight from the event's own
+    tags -- cached after the first lookup. Falls back to "other" (never
+    "", so a blank category can't silently reappear) if the event has no
+    recognized top-level tag, and to "other" plus a logged warning if the
+    API call itself fails.
+    """
+    if not event_slug:
+        return "other"
+    if event_slug in _event_category_cache:
+        return _event_category_cache[event_slug]
+    try:
+        data = get_json(f"{POLY_GAMMA_API}/events/slug/{event_slug}")
+        # /events/slug/{slug} normally returns a single event dict, but
+        # handle a list defensively in case of an API version difference.
+        event = data[0] if isinstance(data, list) and data else data
+        tags = (event or {}).get("tags") or []
+        labels = [t.get("label", "") for t in tags if isinstance(t, dict)]
+        primary = next((l for l in labels if l.lower() in _TOP_LEVEL_TAG_LABELS), None)
+        cat = primary.lower() if primary else (labels[0].lower() if labels else "other")
+    except Exception as e:
+        print(f"get_event_category failed for {event_slug}: {e}")
+        cat = "other"
+    _event_category_cache[event_slug] = cat
+    return cat
+
 
 def get_json(url, params=None, retries=3, pause=0.7):
     last = None
@@ -133,6 +188,7 @@ def summarize(kind, key, meta, entries, opp, top_count, min_traders) -> dict:
         "momentum": round(momentum,4), "upside": round(upside,4),
         "outcome": key[1], "title": meta.get("title",""),
         "slug": meta.get("slug",""), "eventSlug": slug,
+        "category": get_event_category(slug),
         "endDate": meta.get("endDate",""), "conditionId": key[0],
         "newestTs": newest, "newestLabel": ts_label(newest),
         "market_url": f"https://polymarket.com/event/{slug}" if slug else "",
