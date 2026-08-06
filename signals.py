@@ -540,20 +540,24 @@ def check_signal_outcomes(cfg=None):
     notify on what would've actually been alert-worthy, the same
     distinction Polymarket already makes via PaperTrade existence.
     """
+    from sqlalchemy import func as _sql_func
     with Session(engine) as s:
-        # Was unbounded -- tried to check every pending signal every single
-        # cycle. Harmless when the backlog was small, but once it grew past
-        # a few thousand (5,900+ as of 2026-08-06), that's thousands of
-        # Kalshi API calls attempted back-to-back every cycle, which the
-        # logs confirmed was tripping real 429 rate limiting on both this
-        # loop AND fetch_markets() in the same cycle. Capped + ordered
-        # oldest-first so the backlog actually drains across cycles instead
-        # of the same huge batch being (mostly unsuccessfully) retried in
-        # full every time.
+        # Was .order_by(Signal.detected_at.asc()) -- meant to drain the
+        # backlog fairly, but backfired: "oldest" doesn't change for a
+        # signal that hasn't resolved yet, so the same fixed set of
+        # oldest signals (Kalshi's oldest pending are long-dated
+        # economics/politics markets that can take weeks or months to
+        # close) got selected and re-checked EVERY cycle, forever --
+        # while the ~5,800 fresher sports/commodities signals that
+        # actually resolve fast never got checked at all. Confirmed live:
+        # zero net progress on the backlog even after the rate-limit fix
+        # started working. Random selection each cycle gives every
+        # pending signal a fair, eventually-covers-everything chance
+        # instead of permanently starving the fast-resolving majority.
         pending = s.query(Signal).filter(
             Signal.outcome == None,
             Signal.detected_at >= datetime.utcnow() - timedelta(days=60)
-        ).order_by(Signal.detected_at.asc()).limit(150).all()
+        ).order_by(_sql_func.random()).limit(150).all()
         pending_data = [
             (p.id, p.platform, p.ticker, p.market_url, p.signal_type,
              p.market_title, p.platform_signal_id, p.move_size, p.depth)
