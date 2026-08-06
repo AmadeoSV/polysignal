@@ -1,10 +1,10 @@
 # PolySignal
 
-A real-time behavioral analytics platform monitoring 200+ prediction markets across [Kalshi](https://kalshi.com) and [Polymarket](https://polymarket.com). Detects smart money consensus patterns and surfaces signals with a statistically verified, audited edge — not just a raw activity feed.
+A real-time behavioral analytics platform monitoring 300+ prediction markets across [Kalshi](https://kalshi.com) and [Polymarket](https://polymarket.com). Detects smart money consensus patterns and surfaces signals with a statistically verified, audited edge — not just a raw activity feed.
 
 **Live:** [polysignal-production-0227.up.railway.app](https://polysignal-production-0227.up.railway.app)
 
-![Dashboard](screenshot.png)
+![Analytics dashboard — PRIME vs. STANDARD paper trading and data-integrity checks](screenshot.png)
 
 ---
 
@@ -42,10 +42,7 @@ Both the resolution bug and the audit fix are live in production. `poly_max_pric
 
 ## Live Validation: Paper Trading
 
-Rather than trust the corrected backtest alone, every signal that clears the validated filter (fresh, ≤35¢) is logged as a hypothetical $5 position — no real capital — and automatically resolved against the same audited outcome pipeline. This builds a genuine forward track record on top of the historical analysis, visible on the dashboard as a live cumulative PnL chart.
-
-![Analytics dashboard](screenshot-analytics.png)
-*PRIME vs. STANDARD paper trading, live and running in parallel; below it, the deduplicated Kalshi accuracy tile — labeled explicitly as distinct-market data, not raw signal rows, after finding raw counts overstate real outcomes by roughly 18x.*
+Rather than trust the corrected backtest alone, every signal that clears the validated filter (fresh, ≤35¢) is logged as a hypothetical $5 position — no real capital — and automatically resolved against the same audited outcome pipeline. This builds a genuine forward track record on top of the historical analysis, visible on the dashboard as a live cumulative PnL chart (see the analytics screenshot above), including the deduplicated Kalshi accuracy tile — labeled explicitly as distinct-market data, not raw signal rows, after finding raw counts overstate real outcomes by roughly 18x.
 
 ---
 
@@ -86,7 +83,7 @@ Getting Kalshi detecting and resolving correctly wasn't the end of it. A second 
 - **Freshness-gated alerting** — only signals caught before significant price drift (<2¢ moved) trigger a Telegram alert; the confirmed-weaker tier is tracked but not surfaced
 - **Paper trading** — every alerted signal is logged as a $5 hypothetical position and auto-resolved, building a live, real-money-free performance record
 - **Standalone audit tooling** — `audit_outcomes.py` independently re-verifies historical outcome data against ground truth, catching systemic labeling defects after the fact
-- **Kalshi order flow detection** — scans 200+ Kalshi markets every 60 seconds for significant price moves with minimum order depth thresholds
+- **Kalshi order flow detection** — scans 300+ Kalshi markets every 60 seconds for significant price moves with minimum order depth thresholds
 - **Telegram alerts** — real-time PRIME-tier notifications with entry price, momentum, consensus %, and live/upcoming resolution context
 - **Morning brief** — daily summary of active signals, paper trading performance, and upcoming Fed/economic releases
 - **Analytics dashboard** — all-time and post-fix signal accuracy, paper trading cumulative PnL, signal volume by day
