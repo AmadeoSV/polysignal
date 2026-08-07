@@ -581,11 +581,22 @@ def check_signal_outcomes(cfg=None):
 
             if platform == "kalshi":
                 status = fetch_market_status(ticker)
-                if status is None or not status.get("result"):
-                    # Not actually settled yet — genuinely still pending,
-                    # regardless of what the live price happens to be
-                    # doing right now (a live-game price spike no longer
-                    # gets mistaken for the market having closed).
+                # Was `not status.get("result")` alone -- checked that a
+                # result existed, but never that the market was actually
+                # `finalized`. Confirmed live and wrong: Kalshi's real
+                # status lifecycle is active -> closed -> determined ->
+                # finalized (disputed/amended also real, possible states),
+                # and `result` can populate during an earlier, non-final
+                # stage. Caught directly on a live MLB game -- outcomes
+                # got written, then silently overwritten multiple times,
+                # hours before the game had actually ended (confirmed
+                # against Kalshi's own live site showing the game still
+                # in-progress at a timestamp after several outcomes had
+                # already been written). Only `finalized` is a genuinely
+                # locked-in result; anything else, treat as still pending,
+                # exactly like the case where `result` is empty.
+                if (status is None or not status.get("result")
+                        or status.get("status") != "finalized"):
                     time.sleep(0.2)
                     continue
                 resolved_yes = status["result"] == "yes"
