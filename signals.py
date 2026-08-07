@@ -628,6 +628,7 @@ def check_signal_outcomes(cfg=None):
                     row = s.get(Signal, sig_id)
                     if row:
                         row.outcome = outcome
+                        row.resolved_at = datetime.utcnow()
                         s.commit()
                         resolved += 1
                         # Only notify if this signal was actually alerted
@@ -657,6 +658,7 @@ def check_signal_outcomes(cfg=None):
                 row = s.get(Signal, sig_id)
                 if row:
                     row.outcome = outcome
+                    row.resolved_at = datetime.utcnow()
                     s.commit()
                     resolved += 1
                     # Kalshi now captures broadly (below any real alert

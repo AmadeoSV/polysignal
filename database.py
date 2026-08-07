@@ -68,6 +68,11 @@ class Signal(Base):
     price_after        = Column(Float)
     depth              = Column(Float)
     outcome            = Column(String, nullable=True)
+    resolved_at        = Column(DateTime, nullable=True)  # when outcome was written -- added
+                                                            # after finding no way to tell *when*
+                                                            # a resolved signal's outcome was set,
+                                                            # which mattered directly during the
+                                                            # Kalshi finalized-status audit (2026-08-07)
     market_url         = Column(Text)
     market_close_time  = Column(String)
     platform_signal_id = Column(String, unique=True)
