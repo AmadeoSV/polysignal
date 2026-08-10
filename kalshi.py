@@ -10,10 +10,18 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 KALSHI_API  = "https://external-api.kalshi.com/trade-api/v2"
-MAX_MARKETS = 300  # was 200 -- raised alongside reordering WATCHED_SERIES
-                    # (sports moved to front) so the cap-starvation issue
-                    # doesn't just shift onto whatever's now near the
-                    # bottom of the list instead of sports.
+MAX_MARKETS = 400  # was 300 -- raised again alongside the guaranteed-floor
+                    # fix (see fetch_markets/MIN_PER_SERIES). The floor
+                    # pass alone can use up to ~245 in the worst case
+                    # (49 series x 5), which would leave pass 2's bonus
+                    # coverage almost no room under the old 300 cap.
+                    # Kept moderate rather than doubling+, given the
+                    # earlier 429 rate-limit storm was caused by
+                    # unbounded/unpaced *other* loops (resolution-check,
+                    # orderbook fetch) -- both separately fixed and
+                    # paced now, so this increase alone shouldn't
+                    # reintroduce that failure, but no reason to push
+                    # further than the actual floor math requires.
 MAX_PER_SERIES = 80  # sub-cap added alongside pagination fix (see
                       # fetch_markets) -- without this, a single busy
                       # series fully paginating could eat the entire
@@ -238,44 +246,76 @@ def orderbook_depth(ob: dict) -> float:
     return total
 
 
+MIN_PER_SERIES = 5  # every series gets at least this many market-checks
+                     # every single cycle, unconditionally -- see
+                     # fetch_markets() for why rotation alone wasn't
+                     # enough (it still fully skips whoever's late in
+                     # any *given* cycle's order, just not the same
+                     # series every time).
+
+
 def fetch_markets() -> List[dict]:
     global _rotation_offset
-    # Was a strict fixed order every cycle -- sports (reordered to the
-    # front a few nights ago specifically so it wouldn't get starved)
-    # combined with economics' 16 series now consistently consumes the
-    # entire MAX_MARKETS budget before the loop ever reaches anything
-    # listed after them. Confirmed directly: financials, commodities,
-    # crypto, and mentions all stopped detecting within the same two-hour
-    # window the day the pagination fix shipped, and never recovered --
-    # over 4 days silently dark. Fixing this the same way sports itself
-    # was fixed (reordering) would just move the identical failure onto
-    # whatever ends up last in a new fixed order once volume shifts
-    # again. Rotating the starting point each cycle instead means no
-    # series can be permanently last -- every series gets real budget
-    # on a regular cadence regardless of how any other category's
-    # volume changes later.
+    all_m, seen, per_series = [], set(), {}
+
+    # Pass 1: guaranteed floor. Every series gets checked every cycle,
+    # full stop -- not "eventually," not "most cycles," every cycle.
+    # Rotation (pass 2, below) fixed the *permanent* starvation from
+    # 2026-08-06 (a fixed order always ends up burying whoever's last,
+    # confirmed directly: financials/commodities/crypto/mentions went
+    # dark for 4+ days once sports+economics started consistently
+    # consuming the whole budget before reaching them). But rotation on
+    # its own still fully skips whoever's late in any single cycle's
+    # order -- just a different series each time instead of the same
+    # one forever. This closes that remaining gap: a small, cheap,
+    # single-page fetch per series, unconditional, before anything else
+    # runs. A move that happens during a series' "floor-only" cycle is
+    # still caught by the next cycle's comparison (detect_move() diffs
+    # against whatever the last-seen price was); what this can still
+    # miss is a price that moves and fully reverses within one cycle's
+    # window on a series that got no bonus coverage that cycle -- a
+    # real, much narrower gap than "this category doesn't exist for 4
+    # days," and one no fixed budget can fully close without either an
+    # unbounded budget or genuinely parallel fetching.
+    for series in WATCHED_SERIES:
+        try:
+            category = get_series_category(series)  # cached after first call per series
+            data = get_json(f"{KALSHI_API}/markets",
+                             params={"limit": MIN_PER_SERIES, "status": "open", "series_ticker": series})
+            count = 0
+            for m in data.get("markets", []):
+                t = m.get("ticker", "")
+                if t and t not in seen:
+                    m["_category"] = category
+                    seen.add(t); all_m.append(m); count += 1
+            per_series[series] = count
+        except Exception as e:
+            print(f"fetch_markets (guaranteed floor) failed for series {series}: {e}")
+            per_series[series] = 0
+        time.sleep(0.05)
+
+    # Pass 2: whatever budget remains after every series' floor goes to
+    # full pagination, in rotated priority order -- rewards genuinely
+    # high-volume series (sports on a full slate day, etc.) with real
+    # coverage beyond their floor, without any series ever starting
+    # pass 1 at zero.
     n = len(WATCHED_SERIES)
     series_order = WATCHED_SERIES[_rotation_offset:] + WATCHED_SERIES[:_rotation_offset]
     _rotation_offset = (_rotation_offset + 6) % n
 
-    all_m, seen = [], set()
     for series in series_order:
         if len(all_m) >= MAX_MARKETS: break
         try:
-            category = get_series_category(series)  # cached after first call per series
+            category = get_series_category(series)
             # Was a single limit=20 call, no pagination -- /markets is
             # cursor-paginated (confirmed against Kalshi's own docs) and
             # a series with more than 20 open markets at once (a normal
             # MLB slate is ~15 games x 2 tickers = ~30) silently lost
-            # everything past position 20, every cycle, forever. Confirmed
-            # concretely: a real, settled MLB game had zero rows in the
-            # signals table despite the series producing signals overall
-            # -- some games were never being fetched at all, not just
-            # slow to resolve. Now follows the cursor until either the
-            # series is exhausted or MAX_MARKETS is hit, same per-series
-            # cap logic as before, just no longer stopping at page one.
+            # everything past position 20, every cycle, forever.
             cursor = None
-            series_count = 0
+            series_count = per_series.get(series, 0)  # floor markets already count toward the cap
+            if series_count >= MAX_PER_SERIES:
+                continue
             for _ in range(10):  # hard ceiling so a bad cursor loop can't run forever
                 params = {"limit": 100, "status": "open", "series_ticker": series}
                 if cursor:
@@ -290,10 +330,7 @@ def fetch_markets() -> List[dict]:
                 # Per-series sub-cap (comfortably above any single day's
                 # MLB+NFL slate) so full pagination on one busy series
                 # can't eat the entire MAX_MARKETS budget and starve
-                # everything listed after it -- the same failure mode
-                # WATCHED_SERIES was reordered to fix, just from a
-                # different cause (one series over-fetching instead of
-                # under-capped fetching stopping too early).
+                # everything listed after it.
                 if not cursor or len(all_m) >= MAX_MARKETS or series_count >= MAX_PER_SERIES:
                     break
                 time.sleep(0.1)
