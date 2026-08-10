@@ -247,37 +247,39 @@ def orderbook_depth(ob: dict) -> float:
 
 
 MIN_PER_SERIES = 5  # every series gets at least this many market-checks
-                     # every single cycle, unconditionally -- see
-                     # fetch_markets() for why rotation alone wasn't
-                     # enough (it still fully skips whoever's late in
-                     # any *given* cycle's order, just not the same
-                     # series every time).
+                     # every floor cycle -- see fetch_markets() for why
+                     # rotation alone wasn't enough (it still fully
+                     # skips whoever's late in any *given* cycle's
+                     # order, just not the same series every time).
+
+_floor_offset = 0  # which half of WATCHED_SERIES gets the floor pass
+                    # this cycle -- see fetch_markets() for why this
+                    # exists (an earlier version floored all 49 series
+                    # every single cycle and reintroduced real 429
+                    # rate limiting from the added call volume).
 
 
 def fetch_markets() -> List[dict]:
-    global _rotation_offset
+    global _rotation_offset, _floor_offset
     all_m, seen, per_series = [], set(), {}
 
-    # Pass 1: guaranteed floor. Every series gets checked every cycle,
-    # full stop -- not "eventually," not "most cycles," every cycle.
-    # Rotation (pass 2, below) fixed the *permanent* starvation from
-    # 2026-08-06 (a fixed order always ends up burying whoever's last,
-    # confirmed directly: financials/commodities/crypto/mentions went
-    # dark for 4+ days once sports+economics started consistently
-    # consuming the whole budget before reaching them). But rotation on
-    # its own still fully skips whoever's late in any single cycle's
-    # order -- just a different series each time instead of the same
-    # one forever. This closes that remaining gap: a small, cheap,
-    # single-page fetch per series, unconditional, before anything else
-    # runs. A move that happens during a series' "floor-only" cycle is
-    # still caught by the next cycle's comparison (detect_move() diffs
-    # against whatever the last-seen price was); what this can still
-    # miss is a price that moves and fully reverses within one cycle's
-    # window on a series that got no bonus coverage that cycle -- a
-    # real, much narrower gap than "this category doesn't exist for 4
-    # days," and one no fixed budget can fully close without either an
-    # unbounded budget or genuinely parallel fetching.
-    for series in WATCHED_SERIES:
+    # Pass 1: guaranteed floor, split across 2 cycles rather than every
+    # series every single cycle. The all-49-every-cycle version closed
+    # the starvation gap correctly but reintroduced real 429 rate
+    # limiting from the added baseline call volume -- confirmed directly
+    # in the logs within hours of deploying it ("fetch_markets
+    # (guaranteed floor) failed for series KXRATECUT: ... 429 rate
+    # limited"). Splitting the floor into two alternating halves
+    # roughly halves worst-case per-cycle floor-pass volume while still
+    # guaranteeing every series gets checked at least once every 2
+    # cycles -- nowhere near the 4+ day blackout this was built to fix,
+    # and it stays within whatever headroom actually exists after
+    # accounting for pass 2 and the rest of the pipeline's calls.
+    half = len(WATCHED_SERIES) // 2
+    floor_series = (WATCHED_SERIES[:half] if _floor_offset == 0 else WATCHED_SERIES[half:])
+    _floor_offset = 1 - _floor_offset
+
+    for series in floor_series:
         try:
             category = get_series_category(series)  # cached after first call per series
             data = get_json(f"{KALSHI_API}/markets",
@@ -292,7 +294,7 @@ def fetch_markets() -> List[dict]:
         except Exception as e:
             print(f"fetch_markets (guaranteed floor) failed for series {series}: {e}")
             per_series[series] = 0
-        time.sleep(0.05)
+        time.sleep(0.15)  # was 0.05 -- matched to the rest of the
 
     # Pass 2: whatever budget remains after every series' floor goes to
     # full pagination, in rotated priority order -- rewards genuinely
