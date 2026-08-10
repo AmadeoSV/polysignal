@@ -21,6 +21,13 @@ MAX_PER_SERIES = 80  # sub-cap added alongside pagination fix (see
                       # it, the same failure mode WATCHED_SERIES was
                       # reordered to fix, just from the opposite cause.
 
+# Persists for the life of the process (resets to 0 on redeploy/restart --
+# harmless, just starts the rotation cycle over rather than mid-way).
+# See fetch_markets() for why this exists: a fixed series order, no
+# matter how it's ordered, always ends up starving whatever's listed
+# last once some other category's volume grows enough.
+_rotation_offset = 0
+
 WATCHED_SERIES = [
     # Sports first -- these resolve within hours/days, unlike most of the
     # macro series below which can take months. Previously listed last
@@ -232,8 +239,27 @@ def orderbook_depth(ob: dict) -> float:
 
 
 def fetch_markets() -> List[dict]:
+    global _rotation_offset
+    # Was a strict fixed order every cycle -- sports (reordered to the
+    # front a few nights ago specifically so it wouldn't get starved)
+    # combined with economics' 16 series now consistently consumes the
+    # entire MAX_MARKETS budget before the loop ever reaches anything
+    # listed after them. Confirmed directly: financials, commodities,
+    # crypto, and mentions all stopped detecting within the same two-hour
+    # window the day the pagination fix shipped, and never recovered --
+    # over 4 days silently dark. Fixing this the same way sports itself
+    # was fixed (reordering) would just move the identical failure onto
+    # whatever ends up last in a new fixed order once volume shifts
+    # again. Rotating the starting point each cycle instead means no
+    # series can be permanently last -- every series gets real budget
+    # on a regular cadence regardless of how any other category's
+    # volume changes later.
+    n = len(WATCHED_SERIES)
+    series_order = WATCHED_SERIES[_rotation_offset:] + WATCHED_SERIES[:_rotation_offset]
+    _rotation_offset = (_rotation_offset + 6) % n
+
     all_m, seen = [], set()
-    for series in WATCHED_SERIES:
+    for series in series_order:
         if len(all_m) >= MAX_MARKETS: break
         try:
             category = get_series_category(series)  # cached after first call per series
