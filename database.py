@@ -578,6 +578,43 @@ class PaperTrade(Base):
     pnl                 = Column(Float, nullable=True)
     resolved_at         = Column(DateTime, nullable=True)
 
+class ShadowTrade(Base):
+    """
+    Shadow-mode position for the eventual real-money bot: logs the exact
+    same entry a real order would take (STANDARD-tier Polymarket signals,
+    the one tier with a confirmed live edge over a real control group),
+    but places no order and risks no money. Two things this proves that
+    PaperTrade alone doesn't:
+
+    1. The early-exit rule found in the repricing-window analysis (a
+       15c+ pop within 1h pays off better sold immediately than held to
+       resolution, confirmed on real sample sizes on both platforms) --
+       PaperTrade always holds to resolution, this doesn't.
+    2. Real execution logic running against live, moving conditions,
+       with nothing at stake if it's wrong -- the actual point of
+       shadow mode. A bug here just produces a wrong log line to go fix,
+       not a real order at a bad price.
+
+    Still doesn't model fill risk, fees, or slippage -- it uses the same
+    observed prices PaperTrade does. Closing that last gap needs a real
+    execution layer, which is exactly why this is a step before that,
+    not a replacement for it.
+    """
+    __tablename__ = "shadow_trades"
+    id                  = Column(Integer, primary_key=True)
+    signal_id           = Column(Integer, index=True)
+    platform_signal_id  = Column(String, index=True)
+    market_title        = Column(Text)
+    entry_price         = Column(Float)
+    stake               = Column(Float, default=5.0)
+    shares              = Column(Float)
+    detected_at         = Column(DateTime, default=datetime.utcnow)
+    outcome             = Column(String, nullable=True)   # WON / LOST / None (pending)
+    pnl                 = Column(Float, nullable=True)
+    exit_price          = Column(Float, nullable=True)
+    exit_reason         = Column(String, nullable=True)   # "early_pop_1h" or "held_to_resolution"
+    exit_time           = Column(DateTime, nullable=True)
+
 Base.metadata.create_all(engine)
 
 # ── Migrations — add new columns to existing tables ───────────────────────────
@@ -657,6 +694,106 @@ def db_resolve_paper_trades():
         if pending:
             s.commit()
         return len(pending)
+
+
+def db_log_shadow_trade(signal_id: int, platform_signal_id: str, title: str,
+                         entry_price: float, stake: float = 5.0):
+    """
+    Log a shadow-mode position for STANDARD-tier Polymarket signals --
+    same entry a real order would take, no money at risk. See
+    ShadowTrade's docstring for why this exists alongside PaperTrade.
+    """
+    if not entry_price or entry_price <= 0:
+        return
+    with Session(engine) as s:
+        existing = s.query(ShadowTrade).filter_by(signal_id=signal_id).first()
+        if existing:
+            return
+        s.add(ShadowTrade(
+            signal_id=signal_id, platform_signal_id=platform_signal_id,
+            market_title=title, entry_price=entry_price, stake=stake,
+            shares=stake / entry_price,
+        ))
+        s.commit()
+
+
+def db_resolve_shadow_trades(pop_threshold: float = 0.15):
+    """
+    Two-stage resolution, checked in this order every time it runs:
+
+    1. Early exit: if the linked SignalPriceHistory row now has a
+       move_1h >= pop_threshold, close the trade at that 1h price right
+       now, regardless of what happens to the market afterward. This is
+       the validated rule -- a 15c+ pop within 1h paid off better sold
+       immediately than held to resolution, confirmed on real sample
+       sizes on both platforms during the repricing-window analysis.
+    2. Otherwise, exactly like PaperTrade: wait for the real outcome and
+       hold to resolution.
+
+    A trade only ever exits one of these two ways, never both -- the
+    early-exit check runs first and skips resolution-based exit for any
+    trade it already closed.
+    """
+    exited = 0
+    with Session(engine) as s:
+        # Stage 1: early exit on a confirmed pop, checked first so a
+        # trade that both pops AND later resolves doesn't get double-
+        # counted -- the pop exit takes priority since that's the
+        # validated rule.
+        pending = s.query(ShadowTrade).filter(ShadowTrade.outcome == None).all()
+        for st in pending:
+            hist = (
+                s.query(SignalPriceHistory)
+                .filter_by(signal_id=st.signal_id)
+                .first()
+            )
+            if hist and hist.move_1h is not None and hist.move_1h >= pop_threshold:
+                exit_price = hist.price_1h
+                st.exit_price = exit_price
+                st.exit_reason = "early_pop_1h"
+                st.exit_time = datetime.utcnow()
+                st.pnl = (st.shares * exit_price) - st.stake
+                st.outcome = "WON" if st.pnl > 0 else "LOST"
+                exited += 1
+        if exited:
+            s.commit()
+
+        # Stage 2: no pop yet -- hold to resolution, same as PaperTrade.
+        still_pending = (
+            s.query(ShadowTrade, Signal.outcome)
+            .join(Signal, Signal.id == ShadowTrade.signal_id)
+            .filter(ShadowTrade.outcome == None, Signal.outcome != None)
+            .all()
+        )
+        for st, sig_outcome in still_pending:
+            st.outcome = sig_outcome
+            st.pnl = (st.shares - st.stake) if sig_outcome == "WON" else -st.stake
+            st.exit_reason = "held_to_resolution"
+            st.exit_time = datetime.utcnow()
+            exited += 1
+        if still_pending:
+            s.commit()
+
+    return exited
+
+
+def db_shadow_trade_stats() -> dict:
+    """Summary stats for a future shadow-mode dashboard card."""
+    with Session(engine) as s:
+        resolved = s.query(ShadowTrade).filter(ShadowTrade.outcome != None).all()
+        pending  = s.query(ShadowTrade).filter(ShadowTrade.outcome == None).count()
+        won      = [t for t in resolved if t.outcome == "WON"]
+        early    = [t for t in resolved if t.exit_reason == "early_pop_1h"]
+        total_pnl = sum(t.pnl or 0 for t in resolved)
+        return {
+            "resolved": len(resolved),
+            "won": len(won),
+            "lost": len(resolved) - len(won),
+            "win_pct": round(100 * len(won) / len(resolved), 1) if resolved else 0,
+            "total_pnl": round(total_pnl, 2),
+            "pending": pending,
+            "early_exits": len(early),
+        }
 
 
 def db_paper_trade_stats(tier: str = "PRIME") -> dict:

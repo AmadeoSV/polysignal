@@ -231,6 +231,13 @@ def run_kalshi_scan():
                 print(f"  {n} paper trades resolved.")
         except Exception as e:
             print(f"  Paper trade resolution error: {e}")
+        try:
+            from database import db_resolve_shadow_trades
+            n = db_resolve_shadow_trades()
+            if n:
+                print(f"  {n} shadow trades resolved.")
+        except Exception as e:
+            print(f"  Shadow trade resolution error: {e}")
         db_cleanup()
         send_morning_brief(_st)
     except Exception as e:

@@ -315,6 +315,18 @@ def check_new_signals(rows: List[dict], platform: str):
                         )
                     except Exception as e:
                         print(f"  STANDARD paper trade log failed for {key[:50]}: {e}")
+                    # Same entry, logged a second time as a shadow trade --
+                    # this one can exit early on a confirmed 15c+/1h pop
+                    # instead of always holding to resolution like the
+                    # PaperTrade above. See ShadowTrade's docstring.
+                    try:
+                        from database import db_log_shadow_trade
+                        db_log_shadow_trade(
+                            r["db_id"], key, r.get("title", ""),
+                            r.get("curPrice", 0)
+                        )
+                    except Exception as e:
+                        print(f"  Shadow trade log failed for {key[:50]}: {e}")
                 continue
 
         url = r.get("url") or r.get("market_url", "")
