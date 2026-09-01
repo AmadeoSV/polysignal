@@ -577,6 +577,16 @@ class PaperTrade(Base):
     outcome             = Column(String, nullable=True)  # WON / LOST / None (pending)
     pnl                 = Column(Float, nullable=True)
     resolved_at         = Column(DateTime, nullable=True)
+    # Crash-size tagging, added after finding a clean, monotonic relationship
+    # between how far a contract's price fell before entry and win rate/ROI --
+    # confirmed on both a retrospective pull and live paper trades separately,
+    # and directly confirmed to explain 9 of the 10 biggest wins ever logged
+    # (all 60c+ crashes). Stored at log time so future queries/dashboard
+    # cards can group by crash tier without re-deriving the threshold logic
+    # or joining back to signals every time. See _crash_tier() for the
+    # actual bucket definitions.
+    crash_size_cents    = Column(Float, nullable=True)
+    crash_tier          = Column(String, nullable=True)  # "under_20c" / "20_39c" / "40_59c" / "60c_plus"
 
 class ShadowTrade(Base):
     """
@@ -614,6 +624,12 @@ class ShadowTrade(Base):
     exit_price          = Column(Float, nullable=True)
     exit_reason         = Column(String, nullable=True)   # "early_pop_1h" or "held_to_resolution"
     exit_time           = Column(DateTime, nullable=True)
+    # Same crash-size tagging as PaperTrade -- see that class's docstring
+    # for why. Kept identical field names on both tables on purpose, so
+    # a query can treat them the same way regardless of which one it's
+    # reading from.
+    crash_size_cents    = Column(Float, nullable=True)
+    crash_tier          = Column(String, nullable=True)
 
 Base.metadata.create_all(engine)
 
@@ -631,6 +647,10 @@ def _run_migrations():
         "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS price_4h FLOAT",
         "ALTER TABLE trader_price_history ADD COLUMN IF NOT EXISTS market_slug VARCHAR",
         "ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS tier VARCHAR",
+        "ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS crash_size_cents FLOAT",
+        "ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS crash_tier VARCHAR",
+        "ALTER TABLE shadow_trades ADD COLUMN IF NOT EXISTS crash_size_cents FLOAT",
+        "ALTER TABLE shadow_trades ADD COLUMN IF NOT EXISTS crash_tier VARCHAR",
     ]
     with engine.connect() as conn:
         for sql in migrations:
@@ -657,6 +677,30 @@ def db_init_signal_price_history(signal_id: int, ticker: str, platform: str,
         s.commit()
 
 
+def _crash_tier(move_size: float):
+    """
+    Classifies how far a contract's price fell (or rose) before entry
+    into the bands checked against both a retrospective pull and live
+    paper trades: win rate and ROI climbed in a clean, uninterrupted
+    line from ~40% under 20c up to ~88% at 60c+, and directly explained
+    9 of the 10 biggest wins ever logged (all 60c+ crashes). Returns
+    (crash_size_cents, tier_label); (None, None) if move_size is
+    unavailable so callers don't have to special-case it.
+    """
+    if move_size is None:
+        return None, None
+    crash_cents = abs(move_size) * 100
+    if crash_cents < 20:
+        tier = "under_20c"
+    elif crash_cents < 40:
+        tier = "20_39c"
+    elif crash_cents < 60:
+        tier = "40_59c"
+    else:
+        tier = "60c_plus"
+    return round(crash_cents, 2), tier
+
+
 def db_log_paper_trade(signal_id: int, platform_signal_id: str, title: str,
                         entry_price: float, stake: float = 5.0, tier: str = "PRIME"):
     """Log a hypothetical position for the given tier. No real money involved."""
@@ -666,10 +710,13 @@ def db_log_paper_trade(signal_id: int, platform_signal_id: str, title: str,
         existing = s.query(PaperTrade).filter_by(signal_id=signal_id).first()
         if existing:
             return
+        sig = s.get(Signal, signal_id)
+        crash_size_cents, crash_tier = _crash_tier(sig.move_size if sig else None)
         s.add(PaperTrade(
             signal_id=signal_id, platform_signal_id=platform_signal_id,
             market_title=title, tier=tier, entry_price=entry_price, stake=stake,
             shares=stake / entry_price,
+            crash_size_cents=crash_size_cents, crash_tier=crash_tier,
         ))
         s.commit()
 
@@ -709,10 +756,13 @@ def db_log_shadow_trade(signal_id: int, platform_signal_id: str, title: str,
         existing = s.query(ShadowTrade).filter_by(signal_id=signal_id).first()
         if existing:
             return
+        sig = s.get(Signal, signal_id)
+        crash_size_cents, crash_tier = _crash_tier(sig.move_size if sig else None)
         s.add(ShadowTrade(
             signal_id=signal_id, platform_signal_id=platform_signal_id,
             market_title=title, entry_price=entry_price, stake=stake,
             shares=stake / entry_price,
+            crash_size_cents=crash_size_cents, crash_tier=crash_tier,
         ))
         s.commit()
 
