@@ -282,79 +282,75 @@ def check_new_signals(rows: List[dict], platform: str):
         if not key or key in already_alerted:
             continue
 
-        # PRIME (fresh, <2c moved) signals get sent to Telegram, same as
-        # before. STANDARD (moved 2c+) signals are still NOT alerted —
-        # but as of today, both tiers get paper-traded forward in
-        # parallel (tagged separately) rather than trusting either
-        # retrospective SQL analysis alone. The original split found
-        # PRIME +16.1c / STANDARD -2.1c (n=417/152); a later, 3x-larger,
-        # time-stable re-check found the opposite (PRIME roughly flat,
-        # STANDARD +19.0c, n=221/466). Rather than flip alerting based
-        # on a number that already reversed once, both tiers now build
-        # a live, honest, forward track record — that's what decides
-        # this, not another backward-looking query.
+        # Both tiers now alert to Telegram. Originally only PRIME (fresh,
+        # <2c moved) did -- STANDARD (moved 2c+) stayed deliberately
+        # silent while it built a clean, unbiased live track record. It's
+        # since beaten a real control group and held up across multiple
+        # separate weeks, so alerting now matches what actually held up
+        # live rather than the original, smaller-sample split. See
+        # format_poly_alert()'s docstring for the full history.
+        tier = "PRIME"
         if platform != "kalshi":
             momentum = r.get("momentum")
             if momentum is None:
                 momentum = r.get("curPrice", 0) - r.get("avgEntry", 0)
             is_fresh = abs(momentum) < 0.02
-            if not is_fresh:
-                try:
-                    from database import db_mark_alert_sent
-                    db_mark_alert_sent(key)
-                except Exception:
-                    pass
-                with _seen_lock:
-                    _seen_signals.add(key)
-                if r.get("db_id"):
-                    try:
-                        from database import db_log_paper_trade
-                        db_log_paper_trade(
-                            r["db_id"], key, r.get("title", ""),
-                            r.get("curPrice", 0), tier="STANDARD"
-                        )
-                    except Exception as e:
-                        print(f"  STANDARD paper trade log failed for {key[:50]}: {e}")
-                    # Same entry, logged a second time as a shadow trade --
-                    # this one can exit early on a confirmed 15c+/1h pop
-                    # instead of always holding to resolution like the
-                    # PaperTrade above. See ShadowTrade's docstring.
-                    try:
-                        from database import db_log_shadow_trade
-                        db_log_shadow_trade(
-                            r["db_id"], key, r.get("title", ""),
-                            r.get("curPrice", 0)
-                        )
-                    except Exception as e:
-                        print(f"  Shadow trade log failed for {key[:50]}: {e}")
-                continue
+            tier = "PRIME" if is_fresh else "STANDARD"
 
-        url = r.get("url") or r.get("market_url", "")
-        try:
-            if platform == "kalshi":
-                msg     = format_kalshi_alert(r)
-                buttons = [{"text": "View on Kalshi", "url": url}] if url else []
-            else:
-                msg     = format_poly_alert(r)
-                buttons = [{"text": "View on Polymarket", "url": url}] if url else []
-            tg_send(msg, buttons=buttons or None)
-            db_mark_alert_sent(key)
-            with _seen_lock:
-                _seen_signals.add(key)
-
-            # Every alert that actually goes out from here forward is a
-            # PRIME signal (the gate above already filtered). Log it as
-            # a hypothetical $5 position, no real money, tagged PRIME so
-            # it stays comparable to the STANDARD track logged above.
-            if platform != "kalshi" and r.get("db_id"):
+            if not is_fresh and r.get("db_id"):
                 try:
                     from database import db_log_paper_trade
                     db_log_paper_trade(
                         r["db_id"], key, r.get("title", ""),
-                        r.get("curPrice", 0), tier="PRIME"
+                        r.get("curPrice", 0), tier="STANDARD"
                     )
                 except Exception as e:
-                    print(f"  Paper trade log failed for {key[:50]}: {e}")
+                    print(f"  STANDARD paper trade log failed for {key[:50]}: {e}")
+                # Same entry, logged a second time as a shadow trade --
+                # this one can exit early on a confirmed 15c+/1h pop
+                # instead of always holding to resolution like the
+                # PaperTrade above. See ShadowTrade's docstring.
+                try:
+                    from database import db_log_shadow_trade
+                    db_log_shadow_trade(
+                        r["db_id"], key, r.get("title", ""),
+                        r.get("curPrice", 0)
+                    )
+                except Exception as e:
+                    print(f"  Shadow trade log failed for {key[:50]}: {e}")
+
+        url = r.get("url") or r.get("market_url", "")
+        try:
+            if platform == "kalshi":
+                # No active alert consumer for Kalshi right now -- signals
+                # still get detected, saved, and tracked for research
+                # exactly as before, just no longer pushed to Telegram.
+                # format_kalshi_alert stays imported above; restoring the
+                # call here is the only thing needed to turn this back on.
+                db_mark_alert_sent(key)
+                with _seen_lock:
+                    _seen_signals.add(key)
+            else:
+                msg     = format_poly_alert(r, tier=tier)
+                buttons = [{"text": "View on Polymarket", "url": url}] if url else []
+                tg_send(msg, buttons=buttons or None)
+                db_mark_alert_sent(key)
+                with _seen_lock:
+                    _seen_signals.add(key)
+
+                # PRIME's paper trade logs here, after a successful alert --
+                # STANDARD already logged its paper + shadow trades above,
+                # before the alert, so it isn't double-logged by reaching
+                # this same block.
+                if tier == "PRIME" and r.get("db_id"):
+                    try:
+                        from database import db_log_paper_trade
+                        db_log_paper_trade(
+                            r["db_id"], key, r.get("title", ""),
+                            r.get("curPrice", 0), tier="PRIME"
+                        )
+                    except Exception as e:
+                        print(f"  Paper trade log failed for {key[:50]}: {e}")
         except Exception as e:
             print(f"  Alert failed for {key[:50]}: {e}")
 

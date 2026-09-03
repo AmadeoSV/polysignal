@@ -151,7 +151,7 @@ def format_cluster_alert(c: dict) -> str:
     return "\n".join(lines)
 
 
-def format_poly_alert(r: dict) -> str:
+def format_poly_alert(r: dict, tier: str = "PRIME") -> str:
     is_live   = r.get("kind") == "LIVE_BUY"
     dom       = round(r.get("dominance",0)*100)
     traders   = r.get("traders",0)
@@ -170,13 +170,35 @@ def format_poly_alert(r: dict) -> str:
     elif dom>=70: cons="strong"
     else:         cons="moderate"
 
-    # Only PRIME (fresh, <2c moved, <=35c) signals reach this function now
-    # — check_new_signals() filters everything else out before sending.
-    # Re-checked on corrected data after the outcome-audit fix: fresh
-    # signals show +16.1c edge (417 distinct markets), moved ones show
-    # -2.1c (essentially no edge) — so STANDARD stopped being worth
-    # alerting on and was cut rather than mislabeled as "weaker but fine."
-    tier_line = "\U0001f3af <b>PRIME SETUP</b> \u2014 fresh entry, confirmed edge tier"
+    # Both PRIME and STANDARD reach this function now. Originally only
+    # PRIME alerted, on a small-sample retrospective check (+16.1c fresh
+    # vs -2.1c moved, n=417/152) -- but a later, 3x-larger, time-stable
+    # re-check found the opposite (PRIME roughly flat, STANDARD +19.0c,
+    # n=221/466), and STANDARD has since beaten a real live control
+    # group and held up across multiple separate weeks. Alerting
+    # switched to match what actually held up live, not the earlier,
+    # smaller-sample number.
+    if tier == "STANDARD":
+        tier_line = "\U0001f4ca <b>STANDARD SETUP</b> \u2014 moved 2\u00a2+, confirmed live edge"
+    else:
+        tier_line = "\U0001f3af <b>PRIME SETUP</b> \u2014 fresh entry"
+
+    # Crash-size context, shown but not gating -- a large, fast drop into
+    # cheap territory showed a clean, monotonic climb in win rate and ROI
+    # on both a retrospective pull and live paper trades (roughly 40% at
+    # 20c+ up to ~88% at 60c+), and explained 9 of the 10 biggest wins
+    # ever logged. Still new enough that it's shown as extra context to
+    # weigh, not yet trusted alone -- same thresholds as _crash_tier() in
+    # database.py so this always matches what gets stored.
+    crash_line = None
+    crash_cents = abs(mom)
+    if mom < 0 and crash_cents >= 20:
+        if crash_cents >= 60:
+            crash_line = f"\U0001f4a5 <b>BIG CRASH</b> \u2014 fell {crash_cents:.0f}\u00a2 before entry (60\u00a2+ tier, strongest historically)"
+        elif crash_cents >= 40:
+            crash_line = f"\U0001f4a5 Crash \u2014 fell {crash_cents:.0f}\u00a2 before entry (40-59\u00a2 tier)"
+        else:
+            crash_line = f"\U0001f4a5 Crash \u2014 fell {crash_cents:.0f}\u00a2 before entry (20-39\u00a2 tier)"
 
     if is_live:
         header = "\u26a1 POLYMARKET \u2014 LIVE BUY CLUSTER"
@@ -215,8 +237,10 @@ def format_poly_alert(r: dict) -> str:
         f"\U0001f465 <b>{traders} top traders</b> | {cons} consensus ({dom}%)", "",
         f"\U0001f4b5 Avg entry: <b>{avg_entry}\u00a2</b> \u2192 Now: <b>{cur_price}\u00a2</b> ({mom_line})",
         f"\U0001f3af Upside remaining to 100\u00a2: <b>{upside}\u00a2</b>",
-        "", timing,
     ]
+    if crash_line:
+        lines.append(crash_line)
+    lines += ["", timing]
     if hor and not is_live:
         lines.append(f"\u23f0 {hor}")
     if opp_pct > 20:
