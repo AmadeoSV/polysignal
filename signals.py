@@ -331,17 +331,24 @@ def check_new_signals(rows: List[dict], platform: str):
                 with _seen_lock:
                     _seen_signals.add(key)
             else:
-                msg     = format_poly_alert(r, tier=tier)
-                buttons = [{"text": "View on Polymarket", "url": url}] if url else []
-                tg_send(msg, buttons=buttons or None)
-                db_mark_alert_sent(key)
-                with _seen_lock:
-                    _seen_signals.add(key)
+                # Telegram now shows STANDARD only -- the tier that's
+                # actually validated and the one being manually traded.
+                # PRIME still gets logged and paper-traded for comparison
+                # (see below), it just isn't pushed to Telegram anymore.
+                if tier != "STANDARD":
+                    db_mark_alert_sent(key)
+                    with _seen_lock:
+                        _seen_signals.add(key)
+                else:
+                    msg     = format_poly_alert(r, tier=tier)
+                    buttons = [{"text": "View on Polymarket", "url": url}] if url else []
+                    tg_send(msg, buttons=buttons or None)
+                    db_mark_alert_sent(key)
+                    with _seen_lock:
+                        _seen_signals.add(key)
 
-                # PRIME's paper trade logs here, after a successful alert --
-                # STANDARD already logged its paper + shadow trades above,
-                # before the alert, so it isn't double-logged by reaching
-                # this same block.
+                # PRIME's paper trade still logs here -- it just no longer
+                # reaches Telegram, per the gate above.
                 if tier == "PRIME" and r.get("db_id"):
                     try:
                         from database import db_log_paper_trade
@@ -356,14 +363,15 @@ def check_new_signals(rows: List[dict], platform: str):
 
 
 def check_cluster_alert(cluster: dict):
+    # Kalshi-only (called from run_kalshi_scan's per-market loop) -- no
+    # longer pushed to Telegram, same reasoning as the new-signal path
+    # above. format_cluster_alert stays imported; restoring the tg_send
+    # call below is the only thing needed to turn this back on.
     key = cluster.get("cluster_key", "")
     with _seen_lock:
         if key in _seen_signals:
             return
         _seen_signals.add(key)
-    msg = format_cluster_alert(cluster)
-    url = cluster.get("url", "")
-    tg_send(msg, buttons=[{"text": "View on Kalshi", "url": url}] if url else None)
 
 
 def fetch_fred_events() -> List[dict]:
@@ -639,17 +647,16 @@ def check_signal_outcomes(cfg=None):
                         row.resolved_at = datetime.utcnow()
                         s.commit()
                         resolved += 1
-                        # Only notify if this signal was actually alerted
-                        # in the first place (PRIME, has a linked paper
-                        # trade). Otherwise you'd get a "resolved" ping
-                        # for a signal you were never told existed —
-                        # confusing, and it happened before this fix.
+                        # Only notify for STANDARD -- the tier actually
+                        # shown on Telegram and manually traded. PRIME
+                        # still resolves and logs pnl either way, it just
+                        # no longer pings, matching new-signal alerting.
                         from database import PaperTrade
                         with Session(engine) as s2:
-                            was_alerted = s2.query(PaperTrade).filter_by(
-                                signal_id=sig_id
+                            standard_trade = s2.query(PaperTrade).filter_by(
+                                signal_id=sig_id, tier="STANDARD"
                             ).first() is not None
-                        if was_alerted:
+                        if standard_trade:
                             tg_send(format_resolution_msg(
                                 title=title or ticker or "market",
                                 outcome=outcome,
@@ -669,24 +676,17 @@ def check_signal_outcomes(cfg=None):
                     row.resolved_at = datetime.utcnow()
                     s.commit()
                     resolved += 1
-                    # Kalshi now captures broadly (below any real alert
-                    # threshold) so it can be researched later — but a
-                    # resolution ping should only fire for what would
-                    # actually have been alert-worthy, same distinction
-                    # Polymarket already makes via PaperTrade existence.
+                    # No longer pinged to Telegram -- Kalshi has no
+                    # PRIME/STANDARD tier concept and isn't part of what's
+                    # being manually traded right now. was_alert_worthy is
+                    # left computed but unused below so re-enabling this
+                    # later is a one-line change if that changes.
                     was_alert_worthy = (
                         cfg is not None
                         and move_size is not None and depth is not None
                         and abs(move_size) >= cfg.get("min_move", float("inf"))
                         and depth >= cfg.get("min_depth", float("inf"))
                     )
-                    if was_alert_worthy:
-                        tg_send(format_resolution_msg(
-                            title=title or ticker or "market",
-                            outcome=outcome,
-                            sig_type=sig_type,
-                            cur_price=cur_price,
-                        ))
         except Exception as e:
             print(f"  Outcome error for {title}: {e}")
         time.sleep(0.3)
