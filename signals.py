@@ -319,6 +319,29 @@ def check_new_signals(rows: List[dict], platform: str):
                 except Exception as e:
                     print(f"  Shadow trade log failed for {key[:50]}: {e}")
 
+                # Third tier being tracked alongside STANDARD: a stricter
+                # subset requiring a 15c+ crash before entry, not just the
+                # 2c+ STANDARD already requires. Every STANDARD_15C signal
+                # is also a STANDARD signal by definition (15c+ always
+                # clears 2c+), so this isn't a competing group, just a
+                # narrower one logged in parallel to see if it holds up
+                # live. Found 2026-09-04: on the cleaned dataset, a 10-15c
+                # move-size sweep showed a real, sharp dip specifically in
+                # the 10-14.99c band (~28% win rate) sitting between two
+                # much stronger neighbors, so 15c was chosen as the actual
+                # cutoff rather than a smoother-looking 10c. Kept silent
+                # (no Telegram alert), same as STANDARD was while it
+                # proved itself, before this gets any real trust.
+                if abs(momentum)*100 >= 15:
+                    try:
+                        from database import db_log_paper_trade
+                        db_log_paper_trade(
+                            r["db_id"], key, r.get("title", ""),
+                            r.get("curPrice", 0), tier="STANDARD_15C"
+                        )
+                    except Exception as e:
+                        print(f"  STANDARD_15C paper trade log failed for {key[:50]}: {e}")
+
         url = r.get("url") or r.get("market_url", "")
         try:
             if platform == "kalshi":
