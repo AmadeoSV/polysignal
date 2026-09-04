@@ -16,7 +16,20 @@ if DATABASE_URL.startswith("postgres://"):
 PORT              = int(os.environ.get("PORT", 5050))
 KALSHI_INTERVAL   = 60
 POLY_POS_INTERVAL = 300
-POLY_LIVE_INTERVAL= 90
+POLY_LIVE_INTERVAL= 20  # was 90 -- checked Polymarket's own documented limit for
+                        # /trades (200 req/10s) against what one full scan cycle
+                        # actually uses: ~100 tracked traders, one call each, fired
+                        # with zero pacing between them (see scan_live in
+                        # polymarket.py). That already fits comfortably inside a
+                        # single 10-second window, so 90s was leaving detected
+                        # prices up to 90s stale for no real rate-limit reason --
+                        # confirmed directly against a real live signal where the
+                        # underlying price had already moved well past what got
+                        # reported, purely from waiting on this interval. 20s
+                        # keeps meaningful headroom under the documented limit
+                        # while cutting worst-case staleness by roughly 4.5x. The
+                        # scanning_poly_live lock already prevents overlapping
+                        # scans if one run ever takes longer than the interval.
 SNAPSHOT_INTERVAL = 300   # persist market snapshots every 5 min (scans still run every 60s)
 
 # ── Imports ────────────────────────────────────────────────────────────────────
