@@ -303,11 +303,46 @@ def fetch_market_end_date(slug: str) -> str:
 
 def scan_live(traders, cfg) -> List[dict]:
     import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     cutoff = int(_time.time()) - cfg["poly_window_min"]*60
     raw = defaultdict(list); meta = {}
-    for t in traders:
-        try: trades = fetch_trades(t["wallet"])
-        except: continue
+
+    # Was fully sequential -- one fetch_trades() call per trader, one at a
+    # time, with a 0.2s sleep after each. With ~100 tracked traders that
+    # made every full scan take 30-40s in practice (confirmed directly in
+    # production logs: consecutive "Poly live scan" lines 31-50s apart,
+    # regardless of what the outer scan interval was configured to). The
+    # interval was never the real bottleneck -- this loop was.
+    #
+    # Parallelizing the fetches is safe specifically because the "most
+    # recent trade wins" logic below already compares real timestamps
+    # (ts >= existing.get("_ts", 0)) rather than trusting whichever
+    # trader's fetch happened to finish first -- that was a deliberate
+    # fix for a past bug (see the comment further down), and it means
+    # this aggregation's correctness never depended on processing order
+    # to begin with. All the actual dict mutations below still happen
+    # single-threaded, after every fetch has completed, so there's no
+    # shared-state race to worry about either.
+    #
+    # Capped at 10 concurrent requests, not all ~100 at once: Polymarket's
+    # documented limit for /trades is 200 req/10s, so 10 at a time leaves
+    # very wide headroom, while still cutting a ~30-40s sequential scan
+    # down to roughly what 10 requests' worth of network latency costs,
+    # not 100 traders' worth of sequential round-trips plus sleeps.
+    def _fetch_one(t):
+        try:
+            return t, fetch_trades(t["wallet"])
+        except Exception:
+            return t, None
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        fetched = [f.result() for f in as_completed(
+            pool.submit(_fetch_one, t) for t in traders
+        )]
+
+    for t, trades in fetched:
+        if trades is None:
+            continue
         for tr in trades:
             ts = ai(fp(tr,["timestamp","createdAt","time"]),0)
             if ts and ts < cutoff: continue
@@ -338,7 +373,6 @@ def scan_live(traders, cfg) -> List[dict]:
                     "curPrice": price,
                     "_ts":      ts,
                 }
-        time.sleep(0.2)
     results = build_signals(raw, meta, "LIVE_BUY", cfg, len(traders))
 
     # Backfill close date for signals that cleared the filter — /trades
