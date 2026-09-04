@@ -941,6 +941,72 @@ def db_paper_trade_stats(tier: str = "PRIME") -> dict:
         }
 
 
+def db_control_group_stats() -> dict:
+    """
+    Same shape as db_paper_trade_stats(), computed instead from every
+    qualifying Polymarket sports signal with no PRIME/STANDARD filter
+    applied at all -- a hypothetical $5 on literally everything that
+    cleared the base price/category filter. This is the honest baseline
+    STANDARD actually needs to beat, not just a comparison against PRIME.
+    Replaced PRIME here entirely once PRIME was confirmed to underperform
+    even this unfiltered baseline -- there was no real reason left to
+    keep tracking it on the live dashboard.
+
+    Excludes signals flagged price_lookup_suspicious, same as
+    db_paper_trade_stats -- see that column's comment on Signal.
+    """
+    with Session(engine) as s:
+        q = (
+            s.query(Signal)
+            .filter(Signal.platform == "polymarket",
+                    Signal.category == "sports",
+                    Signal.price_after < 0.35,
+                    Signal.outcome != None,
+                    or_(Signal.price_lookup_suspicious.is_(None),
+                        Signal.price_lookup_suspicious == False))
+        )
+        resolved = q.all()
+        pending  = (
+            s.query(Signal)
+            .filter(Signal.platform == "polymarket",
+                    Signal.category == "sports",
+                    Signal.price_after < 0.35,
+                    Signal.outcome == None)
+            .count()
+        )
+        won = [sig for sig in resolved if sig.outcome == "WON"]
+
+        def _pnl(sig):
+            # Hypothetical $5 stake, same formula as every other paper
+            # trade -- shares = stake/entry_price, payout $1/share if won.
+            if not sig.price_after or sig.price_after <= 0:
+                return 0.0
+            return (5.0 / sig.price_after - 5.0) if sig.outcome == "WON" else -5.0
+
+        total_pnl = sum(_pnl(sig) for sig in resolved)
+
+        ordered = sorted(resolved, key=lambda sig: sig.resolved_at or datetime.min)
+        cum, pnl_series = 0, []
+        for sig in ordered:
+            cum += _pnl(sig)
+            pnl_series.append({
+                "date": sig.resolved_at.strftime("%m/%d") if sig.resolved_at else "",
+                "pnl":  round(cum, 2),
+            })
+
+        return {
+            "tier":       "BASELINE",
+            "resolved":   len(resolved),
+            "pending":    pending,
+            "won":        len(won),
+            "lost":       len(resolved) - len(won),
+            "win_rate":   round(len(won) / len(resolved) * 100, 1) if resolved else None,
+            "total_pnl":  round(total_pnl, 2),
+            "total_staked": round(len(resolved) * 5.0, 2),
+            "pnl_series": pnl_series,
+        }
+
+
 def db_init_trader_entry(condition_id: str, outcome: str, title: str,
                           rank: int, username: str, entry_price: float,
                           slug: str = ""):

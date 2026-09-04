@@ -431,10 +431,15 @@ def api_analytics():
 @app.route("/api/paper_trades")
 @requires_auth
 def api_paper_trades():
-    from database import db_paper_trade_stats
-    prime = db_paper_trade_stats("PRIME")
-    prime["standard"] = db_paper_trade_stats("STANDARD")
-    return jsonify(prime)
+    from database import db_paper_trade_stats, db_control_group_stats
+    # Was db_paper_trade_stats("PRIME") here -- PRIME was confirmed to
+    # underperform even a plain, unfiltered baseline (30.5% vs. the
+    # baseline's own 38.5%, both measured the same clean way), so there
+    # was nothing left worth showing it for on the live dashboard.
+    # Replaced with the actual baseline STANDARD needs to beat.
+    baseline = db_control_group_stats()
+    baseline["standard"] = db_paper_trade_stats("STANDARD")
+    return jsonify(baseline)
 
 @app.route("/api/scan_now", methods=["POST"])
 @requires_auth
@@ -1058,19 +1063,19 @@ function renderAnalytics() {
 
   // ZONE 1 -- Live validation: the actual thing being tested right now.
   const std = paperTrades.standard || {};
-  let html=`<div class="sec-title">\u{1f3af} Live validation \u2014 PRIME vs STANDARD, running in parallel</div>
+  let html=`<div class="sec-title">\u{1f3af} Live validation \u2014 STANDARD vs the real baseline</div>
   <div class="agrid">
     <div class="scard" style="grid-column:span 4">
       <div class="sv" style="color:var(--amber);font-size:16px">
         ${paperTrades.resolved ? `${paperTrades.win_rate}% (${paperTrades.won}W/${paperTrades.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(paperTrades.total_pnl)}">${pnlS(paperTrades.total_pnl)}</span> on $${paperTrades.total_staked} staked &nbsp; | &nbsp; ${paperTrades.pending||0} pending` : `Accumulating\u2026 (${paperTrades.pending||0} pending)`}
       </div>
-      <div class="sl">PRIME (fresh, &lt;2c moved) \u2014 $5/signal, no real money, alerted on Telegram</div>
+      <div class="sl">BASELINE (no filter) \u2014 hypothetical $5/signal on every qualifying signal, no PRIME/STANDARD split \u2014 the honest bar STANDARD actually has to clear</div>
     </div>
     <div class="scard" style="grid-column:span 4">
       <div class="sv" style="color:var(--blue);font-size:16px">
         ${std.resolved ? `${std.win_rate}% (${std.won}W/${std.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(std.total_pnl)}">${pnlS(std.total_pnl)}</span> on $${std.total_staked} staked &nbsp; | &nbsp; ${std.pending||0} pending` : `Accumulating\u2026 (${std.pending||0} pending)`}
       </div>
-      <div class="sl">STANDARD (moved 2c+) \u2014 $5/signal, no real money, logged but NOT alerted \u2014 started Aug 4, tracked to test whether a large retrospective re-check (STANDARD +19.0c vs PRIME roughly flat, n=687) holds up live</div>
+      <div class="sl">STANDARD (moved 2c+) \u2014 $5/signal, no real money \u2014 confirmed beating the baseline above by ~5 points, holding steady across separate weeks. PRIME (fresh, &lt;2c moved) was retired from this view after confirming it underperforms even the unfiltered baseline.</div>
     </div>
   </div>
   <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
@@ -1147,17 +1152,49 @@ function initCharts() {
       }
       return out;
     };
-    const datasets=[{label:'PRIME',data:fillOnto(paperTrades.pnl_series,allDates),borderColor:'#22c55e',
-      backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:.4,pointRadius:2}];
+    // Baseline styled to recede -- a quiet, dashed reference line, not
+    // competing for attention. STANDARD gets a real gradient glow under
+    // it, since that's the actual result worth looking at: it's the one
+    // beating the baseline, so it should read as the hero of the chart,
+    // not sit visually equal to the line it's supposed to be outperforming.
+    const ctx = pnlEl.getContext('2d');
+    const stdGlow = ctx.createLinearGradient(0, 0, 0, pnlEl.clientHeight || 260);
+    stdGlow.addColorStop(0,   'rgba(59,130,246,.35)');
+    stdGlow.addColorStop(0.6, 'rgba(59,130,246,.08)');
+    stdGlow.addColorStop(1,   'rgba(59,130,246,0)');
+
+    const datasets=[{label:'Baseline (no filter)',data:fillOnto(paperTrades.pnl_series,allDates),
+      borderColor:'#6b7280',borderWidth:1.5,borderDash:[4,3],
+      backgroundColor:'rgba(107,114,128,.05)',fill:true,tension:.35,
+      pointRadius:0,pointHoverRadius:4,pointHitRadius:10,
+      pointBackgroundColor:'#6b7280',order:2}];
     if(stdSeries.length){
-      datasets.push({label:'STANDARD',data:fillOnto(stdSeries,allDates),borderColor:'#3b82f6',
-        backgroundColor:'rgba(59,130,246,.1)',fill:true,tension:.4,pointRadius:2});
+      datasets.push({label:'STANDARD',data:fillOnto(stdSeries,allDates),
+        borderColor:'#3b82f6',borderWidth:2.5,
+        backgroundColor:stdGlow,fill:true,tension:.35,
+        pointRadius:0,pointHoverRadius:5,pointHitRadius:10,
+        pointBackgroundColor:'#3b82f6',pointBorderColor:'#0d1117',pointBorderWidth:2,
+        order:1});
     }
     charts.pnl=new Chart(pnlEl,{type:'line',data:{
       labels:allDates,
       datasets:datasets
     },options:{...opts,
-      plugins:{...opts.plugins,legend:{display:stdSeries.length>0,labels:{color:'#7a7a8a',font:{size:10}}},title:{display:true,text:stdSeries.length?'PRIME vs STANDARD — Cumulative PnL ($)':'PRIME Paper Trading — Cumulative PnL ($)',color:'#7a7a8a',font:{size:12}}}
+      interaction:{mode:'index',intersect:false},
+      elements:{line:{capBezierPoints:true}},
+      plugins:{...opts.plugins,
+        legend:{display:stdSeries.length>0,position:'top',align:'end',
+          labels:{color:'#9ca3af',font:{size:11},usePointStyle:true,pointStyle:'line',boxWidth:24,padding:16}},
+        title:{display:true,text:stdSeries.length?'STANDARD vs Baseline — Cumulative PnL ($)':'Baseline — Cumulative PnL ($)',
+          color:'#e5e7eb',font:{size:13,weight:'600'},padding:{bottom:14}},
+        tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,
+          titleColor:'#e5e7eb',bodyColor:'#9ca3af',padding:10,cornerRadius:6,
+          callbacks:{label:(c)=>` ${c.dataset.label}: $${c.parsed.y.toLocaleString()}`}}
+      },
+      scales:{
+        x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#6b7280',font:{size:10},maxRotation:0,autoSkip:true,autoSkipPadding:20}},
+        y:{grid:{color:'rgba(255,255,255,.06)'},ticks:{color:'#6b7280',font:{size:10},callback:(v)=>'$'+v.toLocaleString()}}
+      }
     }});
   }
   const sigEl=document.getElementById('sig-chart');
@@ -1304,8 +1341,8 @@ function updateUI(){
   document.getElementById('hstats').innerHTML=
     `<div class="hstat">Kalshi: <b>${state.last_kalshi?state.last_kalshi.split(' ')[1]:'—'}</b></div>
      <div class="hstat">Poly: <b>${state.last_poly_pos?state.last_poly_pos.split(' ')[1]:'—'}</b></div>
-     <div class="hstat" title="PRIME paper trades, no real money">PRIME win rate: <b style="color:var(--green)">${ptHeader}</b></div>
-     <div class="hstat" title="PRIME paper trades, no real money">Paper PnL: <b style="color:${pnlC(paperTrades.total_pnl||0)}">${paperTrades.resolved?pnlS(paperTrades.total_pnl):'$0.00'}</b></div>`;
+     <div class="hstat" title="Baseline: unfiltered signals, no real money">Baseline win rate: <b style="color:var(--green)">${ptHeader}</b></div>
+     <div class="hstat" title="Baseline: unfiltered signals, no real money">Paper PnL: <b style="color:${pnlC(paperTrades.total_pnl||0)}">${paperTrades.resolved?pnlS(paperTrades.total_pnl):'$0.00'}</b></div>`;
 
   if(state.config){
     document.getElementById('k-move').value=Math.round((state.config.kalshi_min_move||0.03)*100);
