@@ -83,6 +83,20 @@ class Signal(Base):
     dominance          = Column(Float, nullable=True)   # consensus % (0-1)
     signal_strength    = Column(Integer, nullable=True) # 1-5 stars
     opposite_traders   = Column(Integer, nullable=True) # traders on opposite side
+    price_lookup_suspicious = Column(Boolean, nullable=True)
+    # Flags Polymarket signals matching the fingerprint of a real bug found
+    # 2026-09-04: build_signals() looked up a market's current price by
+    # conditionId alone, not (conditionId, outcome), so it could silently
+    # grab a DIFFERENT outcome's price on any multi-outcome market. That
+    # bug is now fixed (see polymarket.py), but roughly 10% of historical
+    # signals were logged before the fix. Its symptom is a price_after
+    # that looks like the complement of the real price rather than a real
+    # move, so price_before + price_after landing close to 1.00 is the
+    # tell. Backfilled once for existing rows (see backfill_suspicious_
+    # prices() below); new rows are never flagged since the root cause is
+    # fixed at the source. Kalshi is never flagged -- its price_before/
+    # price_after are the same contract at two points in time, not two
+    # different outcomes, so this fingerprint doesn't apply there at all.
     trades             = relationship("Trade", back_populates="signal")
 
 class Trade(Base):
@@ -651,6 +665,7 @@ def _run_migrations():
         "ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS crash_tier VARCHAR",
         "ALTER TABLE shadow_trades ADD COLUMN IF NOT EXISTS crash_size_cents FLOAT",
         "ALTER TABLE shadow_trades ADD COLUMN IF NOT EXISTS crash_tier VARCHAR",
+        "ALTER TABLE signals ADD COLUMN IF NOT EXISTS price_lookup_suspicious BOOLEAN",
     ]
     with engine.connect() as conn:
         for sql in migrations:
@@ -844,6 +859,29 @@ def db_shadow_trade_stats() -> dict:
             "pending": pending,
             "early_exits": len(early),
         }
+
+
+def backfill_suspicious_prices() -> int:
+    """
+    One-time backfill for the price_lookup_suspicious flag -- run this
+    once after deploying, then it never needs to run again since new
+    signals are logged correctly at the source now. Not called
+    automatically anywhere; call it manually (e.g. from a one-off script
+    or a REPL) when ready. Scoped to Polymarket only -- see the column's
+    comment on the Signal model for why Kalshi is never flagged.
+    """
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        result = conn.execute(text("""
+            UPDATE signals
+            SET price_lookup_suspicious = TRUE
+            WHERE platform = 'polymarket'
+              AND price_before IS NOT NULL AND price_after IS NOT NULL
+              AND ABS(price_before + price_after - 1.0) < 0.03
+              AND (price_lookup_suspicious IS NULL OR price_lookup_suspicious = FALSE)
+        """))
+        conn.commit()
+        return result.rowcount
 
 
 def db_paper_trade_stats(tier: str = "PRIME") -> dict:
