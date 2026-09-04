@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (create_engine, Column, Integer, Float, String,
-                        Boolean, DateTime, Text, ForeignKey, func)
+                        Boolean, DateTime, Text, ForeignKey, func, or_)
 from sqlalchemy.orm import DeclarativeBase, Session, relationship
 
 # ── Engine ─────────────────────────────────────────────────────────────────────
@@ -892,9 +892,23 @@ def db_paper_trade_stats(tier: str = "PRIME") -> dict:
     tier=None for both combined (rarely what you want, since the whole
     point of tracking them separately is to compare them, not blend
     them back together).
+
+    Excludes any trade whose underlying signal is flagged
+    price_lookup_suspicious (see that column's comment on Signal) --
+    found 2026-09-04: a bug that could grab the wrong outcome's price
+    on multi-outcome markets, confirmed to have inflated STANDARD's
+    apparent win rate and PnL. This is the permanent fix at the display
+    layer: the dashboard now always reflects the clean numbers going
+    forward, without needing to rewrite or guess at any historical
+    entry prices, which were never recoverable to begin with.
     """
     with Session(engine) as s:
-        q = s.query(PaperTrade)
+        q = (
+            s.query(PaperTrade)
+            .join(Signal, Signal.id == PaperTrade.signal_id)
+            .filter(or_(Signal.price_lookup_suspicious.is_(None),
+                        Signal.price_lookup_suspicious == False))
+        )
         if tier:
             q = q.filter(PaperTrade.tier == tier)
         resolved = q.filter(PaperTrade.outcome != None).all()
