@@ -227,7 +227,19 @@ def build_signals(raw, meta, kind, cfg, top_count) -> List[dict]:
         dom_out   = max(side_stats, key=lambda o: side_stats[o]["weightedVal"])
         dom       = side_stats[dom_out]
         dominance = dom["weightedVal"] / total_w
-        m         = next((meta[k] for k in meta if k[0]==cid), {})
+        # Was `next((meta[k] for k in meta if k[0]==cid), {})` -- meta is
+        # keyed by (conditionId, outcome), but this only matched on cid,
+        # so it could silently grab a DIFFERENT outcome's price for the
+        # same match. Confirmed directly: a real Lehecka vs Tsitsipas
+        # signal reported curPrice=0.19 (momentum -61.7c, upside 81.0c)
+        # while Lehecka's real, unchanged price the entire time was ~81c
+        # -- 0.19 is Tsitsipas's real price, picked up because dict
+        # iteration happened to hit that key first. Was likely already
+        # latent before this, but sequential fetching gave a fixed,
+        # repeatable insertion order per market -- parallelizing the
+        # fetches (see scan_live) made that order effectively random
+        # per scan, which is what made this actually start surfacing.
+        m         = meta.get((cid, dom_out), {})
         cur       = m.get("curPrice",0)
         momentum  = cur - dom["avgEntry"]
         upside    = 1.0 - cur
