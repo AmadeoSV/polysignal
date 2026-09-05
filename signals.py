@@ -459,21 +459,37 @@ def send_morning_brief(state_ref: dict):
         p_sigs = [s for s in active if s["platform"] == "polymarket"]
 
         from database import db_paper_trade_stats, db_analytics
-        pt = db_paper_trade_stats()
+        standard    = db_paper_trade_stats(tier="STANDARD")
+        standard15c = db_paper_trade_stats(tier="STANDARD_15C")
+        prime       = db_paper_trade_stats(tier="PRIME")
         a  = db_analytics()
 
         top_poly = state_ref.get("poly_positions", [])[:4]
         top_k    = state_ref.get("kalshi_signals", [])[:3]
 
-        if pt.get("resolved"):
-            pt_line = (f"PRIME paper trades: <b>{pt['win_rate']}%</b> "
-                       f"({pt['won']}W/{pt['lost']}L) | "
-                       f"PnL: <b>${pt['total_pnl']:+.2f}</b>"
-                       + (f" | {pt['pending']} pending" if pt.get("pending") else ""))
-        else:
-            pending = pt.get("pending", 0)
-            pt_line = (f"PRIME paper trades: accumulating\u2026"
-                       + (f" ({pending} pending)" if pending else ""))
+        # Headline tiers switched from PRIME to STANDARD/STANDARD_15C
+        # 2026-09-04 -- PRIME confirmed to underperform even the unfiltered
+        # baseline (30.5% vs 38.5%) and is retired from both Telegram alerts
+        # and the dashboard's live-validation cards. STANDARD is the tier
+        # actually alerted and manually traded; STANDARD_15C is the
+        # stricter, higher-win-rate subset flagged separately in Telegram
+        # (see format_poly_alert's standard_15c_line). PRIME is kept at the
+        # bottom, purely informational, since it's still paper-traded
+        # forward for ongoing comparison -- it's just no longer what this
+        # brief leads with. "n=" on each line is resolved+pending combined,
+        # i.e. how many signals have actually logged into that tier so far.
+        def _tier_line(pt: dict, label: str) -> str:
+            n = pt.get("resolved", 0) + pt.get("pending", 0)
+            if pt.get("resolved"):
+                return (f"{label}: <b>{pt['win_rate']}%</b> "
+                        f"({pt['won']}W/{pt['lost']}L) | "
+                        f"PnL: <b>${pt['total_pnl']:+.2f}</b> | n={n}"
+                        + (f" | {pt['pending']} pending" if pt.get("pending") else ""))
+            return f"{label}: accumulating\u2026 (n={n})"
+
+        standard_line    = _tier_line(standard, "STANDARD")
+        standard15c_line = _tier_line(standard15c, "STANDARD_15C")
+        prime_line       = _tier_line(prime, "PRIME (retired, comparison only)")
 
         # Kalshi's own line, computed fresh from the DB rather than from
         # whatever happens to be sitting in in-memory state at 8am — Kalshi
@@ -493,8 +509,10 @@ def send_morning_brief(state_ref: dict):
             "\u2600\ufe0f <b>PolySignal Morning Brief</b>",
             "\u2501" * 20,
             f"Signals active: <b>{len(active)}</b> ({len(k_sigs)} Kalshi, {len(p_sigs)} Polymarket)",
-            pt_line,
+            standard_line,
+            standard15c_line,
             kalshi_line,
+            prime_line,
             "",
         ]
         if top_poly:
