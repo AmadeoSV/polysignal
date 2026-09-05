@@ -494,6 +494,8 @@ HTML = r"""<!DOCTYPE html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PolySignal</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
 <style>
 :root{--bg:#0f0f11;--surf:#18181c;--card:#1e1e24;--border:#2a2a32;--text:#e8e8f0;--muted:#7a7a8a;
   --green:#22c55e;--red:#ef4444;--amber:#f59e0b;--blue:#3b82f6;--purple:#a855f7;--teal:#14b8a6}
@@ -700,6 +702,15 @@ let state={kalshi_signals:[],poly_positions:[],poly_live:[],config:{},events:[],
 let sigs_db=[], trades_db=[], analytics={}, paperTrades={}, recentSignals={kalshi:[],polymarket:[],kalshi_count:0,poly_count:0};
 let calY=new Date().getFullYear(), calM=new Date().getMonth(), selDay=null;
 let charts={};
+// Called from the "Reset zoom" buttons above the pnl/edge charts.
+// chartjs-plugin-zoom attaches resetZoom() to the chart instance once a
+// zoom/pan config is present -- guarded here in case a chart hasn't been
+// built yet (e.g. no paper trade data at all) or the plugin failed to
+// load, so a stray click can't throw and break the rest of the page.
+function resetChartZoom(which){
+  const c = charts[which];
+  if(c && typeof c.resetZoom === 'function') c.resetZoom();
+}
 
 const TABS=['home','kalshi','polymarket','trades','analytics'];
 
@@ -1103,7 +1114,14 @@ function renderAnalytics() {
       <div class="sl">STANDARD_15C (moved 15c+, a stricter STANDARD subset) \u2014 $5/signal, no real money \u2014 date-matched to STANDARD above, still proving itself live before this gets the same trust STANDARD has now</div>
     </div>
   </div>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:4px">
+    <button onclick="resetChartZoom('pnl')" style="background:var(--card);border:1px solid var(--border);color:var(--muted);font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer">Reset zoom</button>
+  </div>
   <div class="chart-wrap chart-tall"><canvas id="pnl-chart"></canvas></div>
+  <div style="font-size:11px;color:var(--muted);margin:2px 0 8px 2px">Scroll/pinch to zoom, drag to pan, either axis \u2014 click "Reset zoom" to return to the full view.</div>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:4px">
+    <button onclick="resetChartZoom('edge')" style="background:var(--card);border:1px solid var(--border);color:var(--muted);font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer">Reset zoom</button>
+  </div>
   <div class="chart-wrap"><canvas id="edge-chart"></canvas></div>
 
 
@@ -1236,7 +1254,17 @@ function initCharts() {
           color:'#e5e7eb',font:{size:13,weight:'600'},padding:{bottom:14}},
         tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,
           titleColor:'#e5e7eb',bodyColor:'#9ca3af',padding:10,cornerRadius:6,
-          callbacks:{label:(c)=>` ${c.dataset.label}: $${c.parsed.y.toLocaleString()}`}}
+          callbacks:{label:(c)=>` ${c.dataset.label}: $${c.parsed.y.toLocaleString()}`}},
+        // Zoom/pan added 2026-09-05 -- taller canvas and dash patterns
+        // helped, but the real ask was interactive zoom like a normal
+        // charting tool: scroll or pinch to zoom on either axis, drag to
+        // pan once zoomed, "Reset zoom" button (below) to snap back to
+        // the full date range. No y-limit imposed -- didn't want to guess
+        // at a floor/ceiling and risk clipping real data on a zoom out.
+        zoom:{
+          pan:{enabled:true,mode:'xy'},
+          zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'xy'}
+        }
       },
       scales:{
         x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#6b7280',font:{size:10},maxRotation:0,autoSkip:true,autoSkipPadding:24}},
@@ -1301,6 +1329,10 @@ function initCharts() {
             tooltip: { backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1,
               titleColor: '#e5e7eb', bodyColor: '#9ca3af', padding: 10, cornerRadius: 6,
               callbacks: { label: (c) => ` ${c.dataset.label}: ${c.parsed.y >= 0 ? '+' : ''}$${c.parsed.y.toLocaleString()}` } },
+            zoom: {
+              pan: { enabled: true, mode: 'xy' },
+              zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'xy' },
+            },
           },
           scales: {
             x: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: '#6b7280', font: { size: 10 }, maxRotation: 0, autoSkip: true, autoSkipPadding: 24 } },
