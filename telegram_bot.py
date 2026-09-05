@@ -158,7 +158,20 @@ def format_poly_alert(r: dict, tier: str = "PRIME") -> str:
     avg_entry = round(r.get("avgEntry",0)*100,1)
     cur_price = round(r.get("curPrice",0)*100,1)
     upside    = round(r.get("upside",0)*100,1)
-    mom       = (r.get("curPrice",0) - r.get("avgEntry",0))*100
+    # Prefer the precomputed momentum field over recomputing curPrice -
+    # avgEntry here. Both signals.py's STANDARD_15C gate (abs(momentum)*100
+    # >= 15) and this display used to derive momentum independently -- but
+    # polymarket.py stores "momentum" as round(curPrice_raw - avgEntry_raw,
+    # 4), computed BEFORE curPrice/avgEntry get separately rounded for
+    # storage. Recomputing from the already-rounded fields here could land
+    # a hair on the other side of the 15c line from what signals.py actually
+    # gated on -- same underlying signal, DB says STANDARD_15C, Telegram
+    # flag doesn't (or vice versa). Falling back to the old recompute only
+    # when "momentum" is absent, matching the same fallback signals.py uses.
+    _momentum_frac = r.get("momentum")
+    if _momentum_frac is None:
+        _momentum_frac = r.get("curPrice",0) - r.get("avgEntry",0)
+    mom       = _momentum_frac * 100
     outcome   = r.get("outcome","")
     end_date  = r.get("endDate","") or r.get("end_date","")
     hor       = _horizon_label(end_date)
@@ -207,6 +220,21 @@ def format_poly_alert(r: dict, tier: str = "PRIME") -> str:
         else:
             crash_line = f"\U0001f4a5 Crash \u2014 fell {crash_cents:.0f}\u00a2 before entry (15-19\u00a2 tier, STANDARD_15C)"
 
+    # Explicit, always-consistent STANDARD_15C flag. crash_line above only
+    # ever fires on mom < 0 (a price drop) and only spells out "STANDARD_15C"
+    # by name in the narrow 15-19c branch -- a 30c or 68c crash also
+    # qualifies for the tier but showed no STANDARD_15C flag at all, making
+    # Telegram an unreliable way to tell which alerts qualify for the tier
+    # actually being traded. This line uses the exact same gating condition
+    # as the STANDARD_15C paper-trade log in signals.py (abs(momentum)*100
+    # >= 15, no sign restriction), so it can be trusted 1:1 against what's
+    # actually stored with tier="STANDARD_15C" in the DB, regardless of
+    # crash direction or size band. Added 2026-09-04 once STANDARD_15C's
+    # backfilled win rate (56.9%, n=499) made it worth trading manually.
+    standard_15c_line = None
+    if crash_cents >= 15:
+        standard_15c_line = "\u2705 <b>STANDARD_15C</b> \u2014 qualifies for the 15\u00a2+ tier (56.9% win rate historically, n=499)"
+
     if is_live:
         header = "\u26a1 POLYMARKET \u2014 LIVE BUY CLUSTER"
         sub    = f"Top traders just bought <b>{outcome}</b> in the last 30 min"
@@ -247,6 +275,8 @@ def format_poly_alert(r: dict, tier: str = "PRIME") -> str:
     ]
     if crash_line:
         lines.append(crash_line)
+    if standard_15c_line:
+        lines.append(standard_15c_line)
     lines += ["", timing]
     if hor and not is_live:
         lines.append(f"\u23f0 {hor}")
