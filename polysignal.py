@@ -439,6 +439,11 @@ def api_paper_trades():
     # Replaced with the actual baseline STANDARD needs to beat.
     baseline = db_control_group_stats()
     baseline["standard"] = db_paper_trade_stats("STANDARD")
+    # Third, stricter tier tracked alongside STANDARD -- every 15c+ crash
+    # is also a 2c+ STANDARD signal, so this isn't a competing group,
+    # just a narrower one being watched to see if it holds up live
+    # before it's trusted the way STANDARD now is.
+    baseline["standard_15c"] = db_paper_trade_stats("STANDARD_15C")
     return jsonify(baseline)
 
 @app.route("/api/scan_now", methods=["POST"])
@@ -1063,6 +1068,7 @@ function renderAnalytics() {
 
   // ZONE 1 -- Live validation: the actual thing being tested right now.
   const std = paperTrades.standard || {};
+  const std15 = paperTrades.standard_15c || {};
   let html=`<div class="sec-title">\u{1f3af} Live validation \u2014 STANDARD vs the real baseline</div>
   <div class="agrid">
     <div class="scard" style="grid-column:span 4">
@@ -1076,6 +1082,12 @@ function renderAnalytics() {
         ${std.resolved ? `${std.win_rate}% (${std.won}W/${std.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(std.total_pnl)}">${pnlS(std.total_pnl)}</span> on $${std.total_staked} staked &nbsp; | &nbsp; ${std.pending||0} pending` : `Accumulating\u2026 (${std.pending||0} pending)`}
       </div>
       <div class="sl">STANDARD (moved 2c+) \u2014 $5/signal, no real money \u2014 confirmed beating the baseline above by ~5 points, holding steady across separate weeks. PRIME (fresh, &lt;2c moved) was retired from this view after confirming it underperforms even the unfiltered baseline.</div>
+    </div>
+    <div class="scard" style="grid-column:span 4">
+      <div class="sv" style="color:var(--green);font-size:16px">
+        ${std15.resolved ? `${std15.win_rate}% (${std15.won}W/${std15.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(std15.total_pnl)}">${pnlS(std15.total_pnl)}</span> on $${std15.total_staked} staked &nbsp; | &nbsp; ${std15.pending||0} pending` : `Accumulating\u2026 (${std15.pending||0} pending)`}
+      </div>
+      <div class="sl">STANDARD_15C (moved 15c+, a stricter STANDARD subset) \u2014 $5/signal, no real money \u2014 backfilled with historical data 2026-09-04, still proving itself live before this gets the same trust STANDARD has now</div>
     </div>
   </div>
   <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
@@ -1136,6 +1148,7 @@ function initCharts() {
     scales:{x:{ticks:{color:'#7a7a8a',font:{size:10}}},y:{ticks:{color:'#7a7a8a',font:{size:10}}}}};
   const pnlEl=document.getElementById('pnl-chart');
   const stdSeries = (paperTrades.standard && paperTrades.standard.pnl_series) || [];
+  const std15Series = (paperTrades.standard_15c && paperTrades.standard_15c.pnl_series) || [];
   if(pnlEl&&paperTrades.pnl_series&&paperTrades.pnl_series.length){
     if(charts.pnl) charts.pnl.destroy();
     // PRIME and STANDARD resolve on different dates at different rates --
@@ -1143,7 +1156,7 @@ function initCharts() {
     // that would silently misalign STANDARD's points once it has more
     // than a couple. Build one shared, sorted date axis and forward-fill
     // each series' last known cumulative value onto it instead.
-    const allDates=[...new Set([...paperTrades.pnl_series.map(p=>p.date), ...stdSeries.map(p=>p.date)])].sort();
+    const allDates=[...new Set([...paperTrades.pnl_series.map(p=>p.date), ...stdSeries.map(p=>p.date), ...std15Series.map(p=>p.date)])].sort();
     const fillOnto=(series,dates)=>{
       let last=0, out=[], i=0;
       for(const d of dates){
@@ -1157,6 +1170,10 @@ function initCharts() {
     // it, since that's the actual result worth looking at: it's the one
     // beating the baseline, so it should read as the hero of the chart,
     // not sit visually equal to the line it's supposed to be outperforming.
+    // STANDARD_15C is drawn but deliberately understated (thin, dotted,
+    // no fill) -- it's a real, backfilled tier worth watching, but it
+    // hasn't earned the same visual weight as STANDARD until it's proven
+    // itself live the same way STANDARD did.
     const ctx = pnlEl.getContext('2d');
     const stdGlow = ctx.createLinearGradient(0, 0, 0, pnlEl.clientHeight || 260);
     stdGlow.addColorStop(0,   'rgba(59,130,246,.35)');
@@ -1167,7 +1184,7 @@ function initCharts() {
       borderColor:'#6b7280',borderWidth:1.5,borderDash:[4,3],
       backgroundColor:'rgba(107,114,128,.05)',fill:true,tension:.35,
       pointRadius:0,pointHoverRadius:4,pointHitRadius:10,
-      pointBackgroundColor:'#6b7280',order:2}];
+      pointBackgroundColor:'#6b7280',order:3}];
     if(stdSeries.length){
       datasets.push({label:'STANDARD',data:fillOnto(stdSeries,allDates),
         borderColor:'#3b82f6',borderWidth:2.5,
@@ -1175,6 +1192,13 @@ function initCharts() {
         pointRadius:0,pointHoverRadius:5,pointHitRadius:10,
         pointBackgroundColor:'#3b82f6',pointBorderColor:'#0d1117',pointBorderWidth:2,
         order:1});
+    }
+    if(std15Series.length){
+      datasets.push({label:'STANDARD_15C (watching)',data:fillOnto(std15Series,allDates),
+        borderColor:'#22c55e',borderWidth:1.5,borderDash:[1,3],
+        backgroundColor:'transparent',fill:false,tension:.35,
+        pointRadius:0,pointHoverRadius:4,pointHitRadius:10,
+        pointBackgroundColor:'#22c55e',order:2});
     }
     charts.pnl=new Chart(pnlEl,{type:'line',data:{
       labels:allDates,

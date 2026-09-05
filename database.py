@@ -718,11 +718,22 @@ def _crash_tier(move_size: float):
 
 def db_log_paper_trade(signal_id: int, platform_signal_id: str, title: str,
                         entry_price: float, stake: float = 5.0, tier: str = "PRIME"):
-    """Log a hypothetical position for the given tier. No real money involved."""
+    """
+    Log a hypothetical position for the given tier. No real money involved.
+
+    Dedup is scoped to (signal_id, tier), not signal_id alone -- a single
+    signal can legitimately have more than one PaperTrade row now that
+    STANDARD_15C exists as a stricter subset of STANDARD (every 15c+
+    signal is also a 2c+ STANDARD signal). Found and fixed 2026-09-04:
+    the old signal_id-only check meant STANDARD_15C's call would always
+    find STANDARD's row (logged moments earlier for the same signal) and
+    silently skip itself every time -- it would never have logged a
+    single trade, caught before this ever deployed.
+    """
     if not entry_price or entry_price <= 0:
         return
     with Session(engine) as s:
-        existing = s.query(PaperTrade).filter_by(signal_id=signal_id).first()
+        existing = s.query(PaperTrade).filter_by(signal_id=signal_id, tier=tier).first()
         if existing:
             return
         sig = s.get(Signal, signal_id)
@@ -859,6 +870,62 @@ def db_shadow_trade_stats() -> dict:
             "pending": pending,
             "early_exits": len(early),
         }
+
+
+def backfill_standard_15c() -> dict:
+    """
+    One-time historical backfill for the STANDARD_15C tier -- creates
+    PaperTrade rows for every past signal that already qualifies (2c+
+    STANDARD criteria plus the stricter 15c+ crash bar found 2026-09-04),
+    so the tracked group starts with its real historical sample instead
+    of only growing from new live signals forward. Covers both already-
+    resolved signals (backfilled with the known outcome/pnl directly)
+    and still-pending ones (backfilled as pending, so the existing,
+    tier-agnostic db_resolve_paper_trades() picks them up correctly once
+    they resolve naturally -- no separate resolution path needed).
+
+    Safe to run more than once: per-(signal_id, tier) dedup means
+    already-backfilled or already-live-logged rows are simply skipped,
+    not duplicated.
+    """
+    with Session(engine) as s:
+        candidates = (
+            s.query(Signal)
+            .filter(Signal.platform == "polymarket",
+                    Signal.category == "sports",
+                    Signal.price_after < 0.35,
+                    or_(Signal.price_lookup_suspicious.is_(None),
+                        Signal.price_lookup_suspicious == False))
+            .all()
+        )
+        resolved_inserted, pending_inserted = 0, 0
+        for sig in candidates:
+            if sig.move_size is None or abs(sig.move_size) * 100 < 15:
+                continue
+            if not sig.price_after or sig.price_after <= 0:
+                continue
+            existing = s.query(PaperTrade).filter_by(signal_id=sig.id, tier="STANDARD_15C").first()
+            if existing:
+                continue
+            crash_size_cents, crash_tier = _crash_tier(sig.move_size)
+            shares = 5.0 / sig.price_after
+            row = PaperTrade(
+                signal_id=sig.id, platform_signal_id=sig.platform_signal_id or "",
+                market_title=sig.market_title, tier="STANDARD_15C",
+                entry_price=sig.price_after, stake=5.0, shares=shares,
+                detected_at=sig.detected_at,
+                crash_size_cents=crash_size_cents, crash_tier=crash_tier,
+            )
+            if sig.outcome:
+                row.outcome     = sig.outcome
+                row.pnl         = (shares - 5.0) if sig.outcome == "WON" else -5.0
+                row.resolved_at = sig.resolved_at
+                resolved_inserted += 1
+            else:
+                pending_inserted += 1
+            s.add(row)
+        s.commit()
+        return {"resolved_backfilled": resolved_inserted, "pending_backfilled": pending_inserted}
 
 
 def backfill_suspicious_prices() -> int:
