@@ -1103,6 +1103,7 @@ function renderAnalytics() {
     </div>
   </div>
   <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
+  <div class="chart-wrap"><canvas id="edge-chart"></canvas></div>
 
 
   <div class="sec-title" style="margin-top:18px">\u{1f50d} Data integrity checks \u2014 is the outcome data trustworthy</div>
@@ -1240,6 +1241,72 @@ function initCharts() {
         y:{grid:{color:'rgba(255,255,255,.06)'},ticks:{color:'#6b7280',font:{size:10},callback:(v)=>'$'+v.toLocaleString()}}
       }
     }});
+
+    // Second chart: PnL relative to baseline, not raw cumulative PnL.
+    // Added 2026-09-05 -- once the three tiers get measured over the same
+    // date range, their raw PnL lines sit close enough together (see the
+    // chart above) that it's genuinely hard to tell which tier is ahead
+    // and by how much. Baseline is flattened to a $0 reference line here
+    // and STANDARD/STANDARD_15C are replotted as their PnL minus
+    // baseline's PnL on the same date -- so "above zero" directly means
+    // "beating doing nothing," and the gap between the two colored lines
+    // is exactly the STANDARD_15C-vs-STANDARD edge being tracked.
+    const edgeEl = document.getElementById('edge-chart');
+    if (edgeEl && (stdSeries.length || std15Series.length)) {
+      if (charts.edge) charts.edge.destroy();
+      const baseFilled = fillOnto(paperTrades.pnl_series, allDates);
+      const stdFilled  = fillOnto(stdSeries, allDates);
+      const s15Filled  = fillOnto(std15Series, allDates);
+      const edgeDatasets = [{
+        label: 'Baseline (0 line)',
+        data: allDates.map(() => 0),
+        borderColor: '#6b7280', borderWidth: 1, borderDash: [4, 3],
+        pointRadius: 0, pointHitRadius: 0, order: 3,
+      }];
+      if (stdSeries.length) {
+        edgeDatasets.push({
+          label: 'STANDARD vs baseline',
+          data: stdFilled.map((v, i) => Math.round((v - baseFilled[i]) * 100) / 100),
+          borderColor: '#3b82f6', borderWidth: 2.5, tension: .35,
+          pointRadius: 0, pointHoverRadius: 5, pointHitRadius: 10,
+          pointBackgroundColor: '#3b82f6', pointBorderColor: '#0d1117', pointBorderWidth: 2,
+          order: 1,
+        });
+      }
+      if (std15Series.length) {
+        edgeDatasets.push({
+          label: 'STANDARD_15C vs baseline',
+          data: s15Filled.map((v, i) => Math.round((v - baseFilled[i]) * 100) / 100),
+          borderColor: '#22c55e', borderWidth: 2, tension: .35,
+          pointRadius: 0, pointHoverRadius: 5, pointHitRadius: 10,
+          pointBackgroundColor: '#22c55e', pointBorderColor: '#0d1117', pointBorderWidth: 2,
+          order: 2,
+        });
+      }
+      charts.edge = new Chart(edgeEl, {
+        type: 'line',
+        data: { labels: allDates, datasets: edgeDatasets },
+        options: {
+          ...opts,
+          interaction: { mode: 'index', intersect: false },
+          layout: { padding: { top: 2, right: 6 } },
+          plugins: {
+            ...opts.plugins,
+            legend: { display: true, position: 'top', align: 'end',
+              labels: { color: '#9ca3af', font: { size: 11 }, usePointStyle: true, pointStyle: 'line', boxWidth: 24, padding: 14 } },
+            title: { display: true, text: 'PnL Ahead of / Behind Baseline ($) — above the dashed line means beating doing nothing',
+              color: '#e5e7eb', font: { size: 13, weight: '600' }, padding: { bottom: 14 } },
+            tooltip: { backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1,
+              titleColor: '#e5e7eb', bodyColor: '#9ca3af', padding: 10, cornerRadius: 6,
+              callbacks: { label: (c) => ` ${c.dataset.label}: ${c.parsed.y >= 0 ? '+' : ''}$${c.parsed.y.toLocaleString()}` } },
+          },
+          scales: {
+            x: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: '#6b7280', font: { size: 10 }, maxRotation: 0, autoSkip: true, autoSkipPadding: 24 } },
+            y: { grid: { color: 'rgba(255,255,255,.06)' }, ticks: { color: '#6b7280', font: { size: 10 }, callback: (v) => (v >= 0 ? '+' : '') + '$' + v.toLocaleString() } },
+          },
+        },
+      });
+    }
   }
   const sigEl=document.getElementById('sig-chart');
   if(sigEl&&a.signals_by_day&&a.signals_by_day.length){
