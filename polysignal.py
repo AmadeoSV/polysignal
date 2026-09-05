@@ -588,6 +588,7 @@ tr:hover td{background:var(--surf)}
 .modal h3{font-size:15px;font-weight:600;margin-bottom:14px}
 .modal-foot{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
 .chart-wrap{background:var(--surf);border-radius:8px;padding:16px 14px 10px;margin-bottom:12px;height:240px}
+.chart-wrap.chart-tall{height:360px}
 .agrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}
 .pgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px}
 .pcard{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
@@ -1102,7 +1103,7 @@ function renderAnalytics() {
       <div class="sl">STANDARD_15C (moved 15c+, a stricter STANDARD subset) \u2014 $5/signal, no real money \u2014 date-matched to STANDARD above, still proving itself live before this gets the same trust STANDARD has now</div>
     </div>
   </div>
-  <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
+  <div class="chart-wrap chart-tall"><canvas id="pnl-chart"></canvas></div>
   <div class="chart-wrap"><canvas id="edge-chart"></canvas></div>
 
 
@@ -1186,15 +1187,16 @@ function initCharts() {
     // empty, so it gets a real, visible line too -- solid, its own light
     // fill, just slightly thinner than STANDARD's since it hasn't logged
     // the same weeks of live-only data yet.
-    const ctx = pnlEl.getContext('2d');
-    const stdGlow = ctx.createLinearGradient(0, 0, 0, pnlEl.clientHeight || 260);
-    stdGlow.addColorStop(0,   'rgba(59,130,246,.35)');
-    stdGlow.addColorStop(0.6, 'rgba(59,130,246,.08)');
-    stdGlow.addColorStop(1,   'rgba(59,130,246,0)');
-    const std15Glow = ctx.createLinearGradient(0, 0, 0, pnlEl.clientHeight || 260);
-    std15Glow.addColorStop(0,   'rgba(34,197,94,.22)');
-    std15Glow.addColorStop(0.6, 'rgba(34,197,94,.05)');
-    std15Glow.addColorStop(1,   'rgba(34,197,94,0)');
+    //
+    // Redesigned 2026-09-05: the three lines converge closely enough in a
+    // fair, date-matched comparison that the overlapping semi-transparent
+    // area fills were blending into one indistinct blob rather than three
+    // readable lines. Dropped fill on STANDARD/STANDARD_15C entirely (kept
+    // only on baseline, which is meant to recede anyway), gave
+    // STANDARD_15C its own dash pattern so it stays visually distinct from
+    // STANDARD even where the values nearly touch, and gave the canvas
+    // more vertical room (chart-tall, 360px vs 240px) so small gaps
+    // between the lines are actually visible instead of compressed flat.
 
     const datasets=[{label:'Baseline (no filter)',data:fillOnto(paperTrades.pnl_series,allDates),
       borderColor:'#6b7280',borderWidth:1.5,borderDash:[4,3],
@@ -1203,17 +1205,17 @@ function initCharts() {
       pointBackgroundColor:'#6b7280',order:3}];
     if(stdSeries.length){
       datasets.push({label:'STANDARD',data:fillOnto(stdSeries,allDates),
-        borderColor:'#3b82f6',borderWidth:2.5,
-        backgroundColor:stdGlow,fill:true,tension:.35,
-        pointRadius:0,pointHoverRadius:5,pointHitRadius:10,
+        borderColor:'#3b82f6',borderWidth:2.75,
+        fill:false,tension:.35,
+        pointRadius:0,pointHoverRadius:6,pointHitRadius:10,
         pointBackgroundColor:'#3b82f6',pointBorderColor:'#0d1117',pointBorderWidth:2,
         order:1});
     }
     if(std15Series.length){
       datasets.push({label:'STANDARD_15C',data:fillOnto(std15Series,allDates),
-        borderColor:'#22c55e',borderWidth:2,
-        backgroundColor:std15Glow,fill:true,tension:.35,
-        pointRadius:0,pointHoverRadius:5,pointHitRadius:10,
+        borderColor:'#22c55e',borderWidth:2.25,borderDash:[7,3],
+        fill:false,tension:.35,
+        pointRadius:0,pointHoverRadius:6,pointHitRadius:10,
         pointBackgroundColor:'#22c55e',pointBorderColor:'#0d1117',pointBorderWidth:2,
         order:2});
     }
