@@ -951,7 +951,7 @@ def backfill_suspicious_prices() -> int:
         return result.rowcount
 
 
-def db_paper_trade_stats(tier: str = "PRIME") -> dict:
+def db_paper_trade_stats(tier: str = "PRIME", since: "datetime | None" = None) -> dict:
     """
     Summary stats for the paper trading dashboard card. Defaults to
     PRIME to preserve existing behavior at every current call site —
@@ -968,6 +968,12 @@ def db_paper_trade_stats(tier: str = "PRIME") -> dict:
     layer: the dashboard now always reflects the clean numbers going
     forward, without needing to rewrite or guess at any historical
     entry prices, which were never recoverable to begin with.
+
+    since: when given, restricts to PaperTrade.detected_at >= since.
+    Pass db_fair_comparison_start() here (as the Analytics route now
+    does) so STANDARD and STANDARD_15C are compared over the same
+    window instead of STANDARD_15C's backfill silently reaching back
+    further than STANDARD's own tracking start (found 2026-09-05).
     """
     with Session(engine) as s:
         q = (
@@ -978,6 +984,8 @@ def db_paper_trade_stats(tier: str = "PRIME") -> dict:
         )
         if tier:
             q = q.filter(PaperTrade.tier == tier)
+        if since is not None:
+            q = q.filter(PaperTrade.detected_at >= since)
         resolved = q.filter(PaperTrade.outcome != None).all()
         pending  = q.filter(PaperTrade.outcome == None).count()
         won      = [t for t in resolved if t.outcome == "WON"]
@@ -1008,7 +1016,62 @@ def db_paper_trade_stats(tier: str = "PRIME") -> dict:
         }
 
 
-def db_control_group_stats() -> dict:
+def db_fair_comparison_start() -> datetime:
+    """
+    The one shared cutoff date used by db_control_group_stats() and
+    db_paper_trade_stats() when called for the Analytics dashboard's
+    Baseline/STANDARD/STANDARD_15C comparison.
+
+    Found 2026-09-05: STANDARD_15C's backfill (run 2026-09-04) reached
+    back to 2026-05-29, while STANDARD itself has only ever been tracked
+    from 2026-08-04 onward -- so the dashboard's side-by-side win rates
+    were quietly comparing two different date ranges dressed up as a
+    clean subset relationship (STANDARD_15C partly earning its edge from
+    9 extra weeks STANDARD was never measured against). Verified the
+    edge survives on a matched Aug-4-onward window (53.1% vs 43.5%,
+    price_lookup_suspicious excluded) -- real, just smaller than the
+    unmatched 56.9%/43.6% the dashboard was showing.
+
+    Rather than hardcode that Aug 4 date, this computes the fair start
+    as MAX(earliest date each series actually has data for) every time
+    it's called -- so if STANDARD_15C's data ever gets reset, a new
+    stricter tier gets added later, or STANDARD's own tracking start
+    ever changes, the comparison window automatically adjusts instead
+    of silently going stale again the way the PRIME/STANDARD dashboard
+    numbers once did.
+    """
+    with Session(engine) as s:
+        base_filter = [
+            Signal.platform == "polymarket",
+            Signal.category == "sports",
+            Signal.price_after < 0.35,
+            or_(Signal.price_lookup_suspicious.is_(None),
+                Signal.price_lookup_suspicious == False),
+        ]
+        earliest_baseline = (
+            s.query(func.min(Signal.detected_at)).filter(*base_filter).scalar()
+        )
+        earliest_standard = (
+            s.query(func.min(PaperTrade.detected_at))
+            .join(Signal, Signal.id == PaperTrade.signal_id)
+            .filter(PaperTrade.tier == "STANDARD",
+                    or_(Signal.price_lookup_suspicious.is_(None),
+                        Signal.price_lookup_suspicious == False))
+            .scalar()
+        )
+        earliest_15c = (
+            s.query(func.min(PaperTrade.detected_at))
+            .join(Signal, Signal.id == PaperTrade.signal_id)
+            .filter(PaperTrade.tier == "STANDARD_15C",
+                    or_(Signal.price_lookup_suspicious.is_(None),
+                        Signal.price_lookup_suspicious == False))
+            .scalar()
+        )
+        candidates = [d for d in (earliest_baseline, earliest_standard, earliest_15c) if d is not None]
+        return max(candidates) if candidates else datetime.min
+
+
+def db_control_group_stats(since: "datetime | None" = None) -> dict:
     """
     Same shape as db_paper_trade_stats(), computed instead from every
     qualifying Polymarket sports signal with no PRIME/STANDARD filter
@@ -1021,6 +1084,12 @@ def db_control_group_stats() -> dict:
 
     Excludes signals flagged price_lookup_suspicious, same as
     db_paper_trade_stats -- see that column's comment on Signal.
+
+    since: when given, restricts to Signal.detected_at >= since. Pass
+    db_fair_comparison_start() here (as the Analytics route now does)
+    to keep this a fair, matched-date comparison against STANDARD and
+    STANDARD_15C rather than pulling in months of extra history they
+    don't have.
     """
     with Session(engine) as s:
         q = (
@@ -1032,15 +1101,19 @@ def db_control_group_stats() -> dict:
                     or_(Signal.price_lookup_suspicious.is_(None),
                         Signal.price_lookup_suspicious == False))
         )
+        if since is not None:
+            q = q.filter(Signal.detected_at >= since)
         resolved = q.all()
-        pending  = (
+        pending_q = (
             s.query(Signal)
             .filter(Signal.platform == "polymarket",
                     Signal.category == "sports",
                     Signal.price_after < 0.35,
                     Signal.outcome == None)
-            .count()
         )
+        if since is not None:
+            pending_q = pending_q.filter(Signal.detected_at >= since)
+        pending = pending_q.count()
         won = [sig for sig in resolved if sig.outcome == "WON"]
 
         def _pnl(sig):

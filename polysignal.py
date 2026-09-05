@@ -431,19 +431,30 @@ def api_analytics():
 @app.route("/api/paper_trades")
 @requires_auth
 def api_paper_trades():
-    from database import db_paper_trade_stats, db_control_group_stats
+    from database import db_paper_trade_stats, db_control_group_stats, db_fair_comparison_start
     # Was db_paper_trade_stats("PRIME") here -- PRIME was confirmed to
     # underperform even a plain, unfiltered baseline (30.5% vs. the
     # baseline's own 38.5%, both measured the same clean way), so there
     # was nothing left worth showing it for on the live dashboard.
     # Replaced with the actual baseline STANDARD needs to beat.
-    baseline = db_control_group_stats()
-    baseline["standard"] = db_paper_trade_stats("STANDARD")
+    #
+    # Found 2026-09-05: STANDARD_15C's backfill reached back to
+    # 2026-05-29 while STANDARD only starts 2026-08-04, so Baseline/
+    # STANDARD/STANDARD_15C were being compared over three different,
+    # unmatched date ranges dressed up as one comparison. since is now
+    # computed fresh on every request (not hardcoded) as whichever
+    # series actually has the latest start date, so this stays a fair,
+    # matched comparison automatically even as more history accumulates
+    # or another tier gets added later.
+    since = db_fair_comparison_start()
+    baseline = db_control_group_stats(since=since)
+    baseline["standard"] = db_paper_trade_stats("STANDARD", since=since)
     # Third, stricter tier tracked alongside STANDARD -- every 15c+ crash
     # is also a 2c+ STANDARD signal, so this isn't a competing group,
     # just a narrower one being watched to see if it holds up live
     # before it's trusted the way STANDARD now is.
-    baseline["standard_15c"] = db_paper_trade_stats("STANDARD_15C")
+    baseline["standard_15c"] = db_paper_trade_stats("STANDARD_15C", since=since)
+    baseline["comparison_since"] = since.strftime("%Y-%m-%d") if since else None
     return jsonify(baseline)
 
 @app.route("/api/scan_now", methods=["POST"])
@@ -1070,6 +1081,7 @@ function renderAnalytics() {
   const std = paperTrades.standard || {};
   const std15 = paperTrades.standard_15c || {};
   let html=`<div class="sec-title">\u{1f3af} Live validation \u2014 STANDARD vs the real baseline</div>
+  <div style="font-size:12px;color:var(--muted);margin:-4px 0 10px 2px">All three below are measured from <b>${paperTrades.comparison_since || '?'}</b> onward \u2014 the latest start date among them, computed fresh each load so this stays a fair, matched comparison even as more history accumulates or another tier gets added. (Found 2026-09-05: STANDARD_15C's backfill quietly reached back to May, giving it ~9 extra weeks STANDARD was never measured against \u2014 this fixes that.)</div>
   <div class="agrid">
     <div class="scard" style="grid-column:span 4">
       <div class="sv" style="color:var(--amber);font-size:16px">
@@ -1087,10 +1099,11 @@ function renderAnalytics() {
       <div class="sv" style="color:var(--green);font-size:16px">
         ${std15.resolved ? `${std15.win_rate}% (${std15.won}W/${std15.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(std15.total_pnl)}">${pnlS(std15.total_pnl)}</span> on $${std15.total_staked} staked &nbsp; | &nbsp; ${std15.pending||0} pending` : `Accumulating\u2026 (${std15.pending||0} pending)`}
       </div>
-      <div class="sl">STANDARD_15C (moved 15c+, a stricter STANDARD subset) \u2014 $5/signal, no real money \u2014 backfilled with historical data 2026-09-04, still proving itself live before this gets the same trust STANDARD has now</div>
+      <div class="sl">STANDARD_15C (moved 15c+, a stricter STANDARD subset) \u2014 $5/signal, no real money \u2014 date-matched to STANDARD above, still proving itself live before this gets the same trust STANDARD has now</div>
     </div>
   </div>
   <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
+
 
   <div class="sec-title" style="margin-top:18px">\u{1f50d} Data integrity checks \u2014 is the outcome data trustworthy</div>
   <div class="agrid">
