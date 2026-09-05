@@ -727,6 +727,12 @@ const usd=n=>'$'+Math.round(n||0).toLocaleString();
 const c=n=>((n||0)*100).toFixed(1)+'¢';
 const pnlC=n=>(n||0)>=0?'var(--green)':'var(--red)';
 const pnlS=n=>((n||0)>=0?'+':'')+parseFloat(n||0).toFixed(2);
+// ROI expressed as a multiple of stake ("6.2x" = $6.20 profit per $1
+// staked). Added 2026-09-05 -- with every trade staking the same $5,
+// raw PnL alone hides that STANDARD_15C gets nearly the same total
+// profit on far less capital deployed; this is the number that
+// actually shows that.
+const roiX=(pnl,staked)=>staked?`${(pnl/staked).toFixed(1)}x`:'\u2014';
 const oc=o=>{const u=o.toUpperCase();return u==='YES'?'b-up':u==='NO'?'b-dn':'b-out';}
 const stars=s=>{const ic=['','🔵','🟢','🟡','🟠','🔴'];return ic[Math.min(s||1,5)];}
 
@@ -1086,26 +1092,27 @@ function renderAnalytics() {
   <div class="agrid">
     <div class="scard" style="grid-column:span 4">
       <div class="sv" style="color:var(--amber);font-size:16px">
-        ${paperTrades.resolved ? `${paperTrades.win_rate}% (${paperTrades.won}W/${paperTrades.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(paperTrades.total_pnl)}">${pnlS(paperTrades.total_pnl)}</span> on $${paperTrades.total_staked} staked &nbsp; | &nbsp; ${paperTrades.pending||0} pending` : `Accumulating\u2026 (${paperTrades.pending||0} pending)`}
+        ${paperTrades.resolved ? `${paperTrades.win_rate}% (${paperTrades.won}W/${paperTrades.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(paperTrades.total_pnl)}">${pnlS(paperTrades.total_pnl)}</span> on $${paperTrades.total_staked} staked (${roiX(paperTrades.total_pnl,paperTrades.total_staked)} ROI) &nbsp; | &nbsp; ${paperTrades.pending||0} pending` : `Accumulating\u2026 (${paperTrades.pending||0} pending)`}
       </div>
       <div class="sl">BASELINE (no filter) \u2014 hypothetical $5/signal on every qualifying signal, no PRIME/STANDARD split \u2014 the honest bar STANDARD actually has to clear</div>
     </div>
     <div class="scard" style="grid-column:span 4">
       <div class="sv" style="color:var(--blue);font-size:16px">
-        ${std.resolved ? `${std.win_rate}% (${std.won}W/${std.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(std.total_pnl)}">${pnlS(std.total_pnl)}</span> on $${std.total_staked} staked &nbsp; | &nbsp; ${std.pending||0} pending` : `Accumulating\u2026 (${std.pending||0} pending)`}
+        ${std.resolved ? `${std.win_rate}% (${std.won}W/${std.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(std.total_pnl)}">${pnlS(std.total_pnl)}</span> on $${std.total_staked} staked (${roiX(std.total_pnl,std.total_staked)} ROI) &nbsp; | &nbsp; ${std.pending||0} pending` : `Accumulating\u2026 (${std.pending||0} pending)`}
       </div>
       <div class="sl">STANDARD (moved 2c+) \u2014 $5/signal, no real money \u2014 confirmed beating the baseline above by ~5 points, holding steady across separate weeks. PRIME (fresh, &lt;2c moved) was retired from this view after confirming it underperforms even the unfiltered baseline.</div>
     </div>
     <div class="scard" style="grid-column:span 4">
       <div class="sv" style="color:var(--green);font-size:16px">
-        ${std15.resolved ? `${std15.win_rate}% (${std15.won}W/${std15.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(std15.total_pnl)}">${pnlS(std15.total_pnl)}</span> on $${std15.total_staked} staked &nbsp; | &nbsp; ${std15.pending||0} pending` : `Accumulating\u2026 (${std15.pending||0} pending)`}
+        ${std15.resolved ? `${std15.win_rate}% (${std15.won}W/${std15.lost}L) &nbsp; | &nbsp; PnL: <span style="color:${pnlC(std15.total_pnl)}">${pnlS(std15.total_pnl)}</span> on $${std15.total_staked} staked (${roiX(std15.total_pnl,std15.total_staked)} ROI) &nbsp; | &nbsp; ${std15.pending||0} pending` : `Accumulating\u2026 (${std15.pending||0} pending)`}
       </div>
       <div class="sl">STANDARD_15C (moved 15c+, a stricter STANDARD subset) \u2014 $5/signal, no real money \u2014 date-matched to STANDARD above, still proving itself live before this gets the same trust STANDARD has now</div>
     </div>
   </div>
   <div class="chart-wrap chart-tall"><canvas id="edge-chart"></canvas></div>
-  <div style="font-size:11px;color:var(--muted);margin:2px 0 12px 2px">The chart above is the one to actually read at a glance -- it's each tier's PnL relative to baseline, not raw dollars, since STANDARD/STANDARD_15C/baseline all sit close enough together in raw PnL that they compress into what looks like one line no matter how it's styled. The raw cumulative view below is kept as the underlying reference.</div>
-  <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
+  <div style="font-size:11px;color:var(--muted);margin:2px 0 12px 2px">The chart above is the one to actually read at a glance -- it's each tier's PnL relative to baseline, not raw dollars, since STANDARD/STANDARD_15C/baseline all sit close enough together in raw PnL that they compress into what looks like one line no matter how it's styled.</div>
+  <div class="chart-wrap"><canvas id="roi-chart"></canvas></div>
+  <div style="font-size:11px;color:var(--muted);margin:2px 0 12px 2px">ROI = cumulative PnL \u00f7 cumulative staked so far, as a multiple -- every trade stakes the same $5, so this is what actually shows STANDARD_15C's real edge: similar total profit to STANDARD, on far less capital at risk.</div>
 
 
   <div class="sec-title" style="margin-top:18px">\u{1f50d} Data integrity checks \u2014 is the outcome data trustworthy</div>
@@ -1162,90 +1169,81 @@ function initCharts() {
   const opts={responsive:true,maintainAspectRatio:false,
     plugins:{legend:{display:false}},
     scales:{x:{ticks:{color:'#7a7a8a',font:{size:10}}},y:{ticks:{color:'#7a7a8a',font:{size:10}}}}};
-  const pnlEl=document.getElementById('pnl-chart');
+  const roiEl=document.getElementById('roi-chart');
   const stdSeries = (paperTrades.standard && paperTrades.standard.pnl_series) || [];
   const std15Series = (paperTrades.standard_15c && paperTrades.standard_15c.pnl_series) || [];
-  if(pnlEl&&paperTrades.pnl_series&&paperTrades.pnl_series.length){
-    if(charts.pnl) charts.pnl.destroy();
+  const stdRoiSeries = (paperTrades.standard && paperTrades.standard.roi_series) || [];
+  const std15RoiSeries = (paperTrades.standard_15c && paperTrades.standard_15c.roi_series) || [];
+  const baseRoiSeries = paperTrades.roi_series || [];
+  if(paperTrades.pnl_series&&paperTrades.pnl_series.length){
     // PRIME and STANDARD resolve on different dates at different rates --
     // can't just reuse PRIME's date list as the x-axis for both lines,
     // that would silently misalign STANDARD's points once it has more
     // than a couple. Build one shared, sorted date axis and forward-fill
-    // each series' last known cumulative value onto it instead.
+    // each series' last known value onto it instead.
     const allDates=[...new Set([...paperTrades.pnl_series.map(p=>p.date), ...stdSeries.map(p=>p.date), ...std15Series.map(p=>p.date)])].sort();
-    const fillOnto=(series,dates)=>{
+    const fillOnto=(series,dates,key='pnl')=>{
       let last=0, out=[], i=0;
       for(const d of dates){
-        while(i<series.length && series[i].date<=d){ last=series[i].pnl; i++; }
+        while(i<series.length && series[i].date<=d){ last=series[i][key]; i++; }
         out.push(last);
       }
       return out;
     };
-    // Baseline styled to recede -- a quiet, dashed reference line, not
-    // competing for attention. STANDARD gets a real gradient glow under
-    // it, since that's the actual, longest-proven result. STANDARD_15C
-    // is now backfilled with a real historical sample rather than sitting
-    // empty, so it gets a real, visible line too -- solid, its own light
-    // fill, just slightly thinner than STANDARD's since it hasn't logged
-    // the same weeks of live-only data yet.
-    //
-    // Redesigned 2026-09-05: the three lines converge closely enough in a
-    // fair, date-matched comparison that the overlapping semi-transparent
-    // area fills were blending into one indistinct blob rather than three
-    // readable lines. Dropped fill on STANDARD/STANDARD_15C entirely (kept
-    // only on baseline, which is meant to recede anyway), gave
-    // STANDARD_15C its own dash pattern so it stays visually distinct from
-    // STANDARD even where the values nearly touch, and gave the canvas
-    // more vertical room (chart-tall, 360px vs 240px) so small gaps
-    // between the lines are actually visible instead of compressed flat.
 
-    const datasets=[{label:'Baseline (no filter)',data:fillOnto(paperTrades.pnl_series,allDates),
-      borderColor:'#6b7280',borderWidth:1.5,borderDash:[4,3],
-      backgroundColor:'rgba(107,114,128,.05)',fill:true,tension:.35,
-      pointRadius:0,pointHoverRadius:4,pointHitRadius:10,
-      pointBackgroundColor:'#6b7280',order:3}];
-    if(stdSeries.length){
-      datasets.push({label:'STANDARD',data:fillOnto(stdSeries,allDates),
-        borderColor:'#3b82f6',borderWidth:2.75,
+    // ROI chart -- swapped in 2026-09-05 to replace the old raw
+    // cumulative-PnL chart. Every trade stakes the same $5, so raw PnL
+    // alone can't show that STANDARD_15C earns nearly the same total
+    // profit as STANDARD on far less capital deployed -- ROI (PnL /
+    // staked-so-far, as a multiple) is the number that actually shows
+    // it, and naturally spreads the three lines apart the same way the
+    // baseline-relative chart above does, since it's not just raw
+    // dollars converging toward the same total.
+    if(roiEl){
+      if(charts.roi) charts.roi.destroy();
+      const roiDatasets=[{label:'Baseline (no filter)',data:fillOnto(baseRoiSeries,allDates,'roi'),
+        borderColor:'#6b7280',borderWidth:1.5,borderDash:[4,3],
         fill:false,tension:.35,
-        pointRadius:0,pointHoverRadius:6,pointHitRadius:10,
-        pointBackgroundColor:'#3b82f6',pointBorderColor:'#0d1117',pointBorderWidth:2,
-        order:1});
-    }
-    if(std15Series.length){
-      datasets.push({label:'STANDARD_15C',data:fillOnto(std15Series,allDates),
-        borderColor:'#22c55e',borderWidth:2.25,borderDash:[7,3],
-        fill:false,tension:.35,
-        pointRadius:0,pointHoverRadius:6,pointHitRadius:10,
-        pointBackgroundColor:'#22c55e',pointBorderColor:'#0d1117',pointBorderWidth:2,
-        order:2});
-    }
-    const titleParts=['Baseline'];
-    if(stdSeries.length) titleParts.push('STANDARD');
-    if(std15Series.length) titleParts.push('STANDARD_15C');
-    charts.pnl=new Chart(pnlEl,{type:'line',data:{
-      labels:allDates,
-      datasets:datasets
-    },options:{...opts,
-      interaction:{mode:'index',intersect:false},
-      elements:{line:{capBezierPoints:true}},
-      layout:{padding:{top:2,right:6}},
-      plugins:{...opts.plugins,
-        legend:{display:datasets.length>1,position:'top',align:'end',
-          labels:{color:'#9ca3af',font:{size:11},usePointStyle:true,pointStyle:'line',boxWidth:24,padding:14}},
-        title:{display:true,text:titleParts.join(' vs ')+' — Cumulative PnL ($)',
-          color:'#e5e7eb',font:{size:13,weight:'600'},padding:{bottom:14}},
-        tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,
-          titleColor:'#e5e7eb',bodyColor:'#9ca3af',padding:10,cornerRadius:6,
-          callbacks:{label:(c)=>` ${c.dataset.label}: $${c.parsed.y.toLocaleString()}`}}
-      },
-      scales:{
-        x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#6b7280',font:{size:10},maxRotation:0,autoSkip:true,autoSkipPadding:24}},
-        y:{grid:{color:'rgba(255,255,255,.06)'},ticks:{color:'#6b7280',font:{size:10},callback:(v)=>'$'+v.toLocaleString()}}
+        pointRadius:0,pointHoverRadius:4,pointHitRadius:10,
+        pointBackgroundColor:'#6b7280',order:3}];
+      if(stdRoiSeries.length){
+        roiDatasets.push({label:'STANDARD',data:fillOnto(stdRoiSeries,allDates,'roi'),
+          borderColor:'#3b82f6',borderWidth:2.75,
+          fill:false,tension:.35,
+          pointRadius:0,pointHoverRadius:6,pointHitRadius:10,
+          pointBackgroundColor:'#3b82f6',pointBorderColor:'#0d1117',pointBorderWidth:2,
+          order:1});
       }
-    }});
+      if(std15RoiSeries.length){
+        roiDatasets.push({label:'STANDARD_15C',data:fillOnto(std15RoiSeries,allDates,'roi'),
+          borderColor:'#22c55e',borderWidth:2.25,borderDash:[7,3],
+          fill:false,tension:.35,
+          pointRadius:0,pointHoverRadius:6,pointHitRadius:10,
+          pointBackgroundColor:'#22c55e',pointBorderColor:'#0d1117',pointBorderWidth:2,
+          order:2});
+      }
+      charts.roi=new Chart(roiEl,{type:'line',data:{
+        labels:allDates,
+        datasets:roiDatasets
+      },options:{...opts,
+        interaction:{mode:'index',intersect:false},
+        layout:{padding:{top:2,right:6}},
+        plugins:{...opts.plugins,
+          legend:{display:roiDatasets.length>1,position:'top',align:'end',
+            labels:{color:'#9ca3af',font:{size:11},usePointStyle:true,pointStyle:'line',boxWidth:24,padding:14}},
+          title:{display:true,text:'ROI Over Time (multiple of stake)',
+            color:'#e5e7eb',font:{size:13,weight:'600'},padding:{bottom:14}},
+          tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,
+            titleColor:'#e5e7eb',bodyColor:'#9ca3af',padding:10,cornerRadius:6,
+            callbacks:{label:(c)=>` ${c.dataset.label}: ${c.parsed.y.toFixed(2)}x`}}
+        },
+        scales:{
+          x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#6b7280',font:{size:10},maxRotation:0,autoSkip:true,autoSkipPadding:24}},
+          y:{grid:{color:'rgba(255,255,255,.06)'},ticks:{color:'#6b7280',font:{size:10},callback:(v)=>v.toFixed(1)+'x'}}
+        }
+      }});
+    }
 
-    // Second chart: PnL relative to baseline, not raw cumulative PnL.
     // Added 2026-09-05 -- once the three tiers get measured over the same
     // date range, their raw PnL lines sit close enough together (see the
     // chart above) that it's genuinely hard to tell which tier is ahead

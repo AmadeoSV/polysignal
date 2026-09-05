@@ -994,13 +994,25 @@ def db_paper_trade_stats(tier: str = "PRIME", since: "datetime | None" = None) -
         # Cumulative PnL over time, ordered by resolution — mirrors the
         # manual-trade pnl_series pattern, but for what's actually being
         # tracked day to day now.
+        #
+        # roi_series added 2026-09-05 alongside it: same running total,
+        # but PnL divided by cumulative staked as of that same trade,
+        # since every trade stakes the same $5 -- STANDARD_15C's real
+        # edge over STANDARD is capital efficiency (~same total PnL on
+        # much less staked), which a raw cumulative-PnL chart can't show
+        # since it doesn't account for how much capital was actually at
+        # risk to get there. ROI expressed as a multiple of stake, e.g.
+        # 6.2 means $6.20 profit per $1 staked so far.
         ordered = sorted(resolved, key=lambda t: t.resolved_at or datetime.min)
-        cum, pnl_series = 0, []
+        cum, cum_staked, pnl_series, roi_series = 0, 0.0, [], []
         for t in ordered:
             cum += t.pnl or 0
-            pnl_series.append({
-                "date": t.resolved_at.strftime("%m/%d") if t.resolved_at else "",
-                "pnl":  round(cum, 2),
+            cum_staked += t.stake or 0
+            date_str = t.resolved_at.strftime("%m/%d") if t.resolved_at else ""
+            pnl_series.append({"date": date_str, "pnl": round(cum, 2)})
+            roi_series.append({
+                "date": date_str,
+                "roi":  round(cum / cum_staked, 4) if cum_staked else 0,
             })
 
         return {
@@ -1013,6 +1025,7 @@ def db_paper_trade_stats(tier: str = "PRIME", since: "datetime | None" = None) -
             "total_pnl":  round(total_pnl, 2),
             "total_staked": round(sum(t.stake for t in resolved), 2),
             "pnl_series": pnl_series,
+            "roi_series": roi_series,
         }
 
 
@@ -1126,12 +1139,18 @@ def db_control_group_stats(since: "datetime | None" = None) -> dict:
         total_pnl = sum(_pnl(sig) for sig in resolved)
 
         ordered = sorted(resolved, key=lambda sig: sig.resolved_at or datetime.min)
-        cum, pnl_series = 0, []
+        # roi_series added 2026-09-05, same reasoning as db_paper_trade_stats:
+        # stake is always $5/signal here (see total_staked below), so
+        # cumulative staked is just 5 * count-so-far.
+        cum, cum_staked, pnl_series, roi_series = 0, 0.0, [], []
         for sig in ordered:
             cum += _pnl(sig)
-            pnl_series.append({
-                "date": sig.resolved_at.strftime("%m/%d") if sig.resolved_at else "",
-                "pnl":  round(cum, 2),
+            cum_staked += 5.0
+            date_str = sig.resolved_at.strftime("%m/%d") if sig.resolved_at else ""
+            pnl_series.append({"date": date_str, "pnl": round(cum, 2)})
+            roi_series.append({
+                "date": date_str,
+                "roi":  round(cum / cum_staked, 4) if cum_staked else 0,
             })
 
         return {
@@ -1144,6 +1163,7 @@ def db_control_group_stats(since: "datetime | None" = None) -> dict:
             "total_pnl":  round(total_pnl, 2),
             "total_staked": round(len(resolved) * 5.0, 2),
             "pnl_series": pnl_series,
+            "roi_series": roi_series,
         }
 
 
