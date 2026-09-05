@@ -191,7 +191,19 @@ def format_poly_alert(r: dict, tier: str = "PRIME") -> str:
     # group and held up across multiple separate weeks. Alerting
     # switched to match what actually held up live, not the earlier,
     # smaller-sample number.
-    if tier == "STANDARD":
+    #
+    # crash_cents is computed here, before tier_line, so the header banner
+    # itself can distinguish STANDARD_15C -- previously every STANDARD-tier
+    # alert showed the identical "STANDARD SETUP" banner regardless of
+    # crash size, and the only STANDARD_15C indicator was a line buried
+    # partway down the body. Scrolling a busy Telegram feed on mobile, that
+    # made a 56.9%-win-rate signal visually indistinguishable at a glance
+    # from a plain ~43.6% one. Found 2026-09-05 after reviewing a real
+    # night's worth of alerts side by side.
+    crash_cents = abs(mom)
+    if tier == "STANDARD" and crash_cents >= 15:
+        tier_line = "\u2b50 <b>STANDARD_15C SETUP</b> \u2014 moved 15\u00a2+, high-confidence tier"
+    elif tier == "STANDARD":
         tier_line = "\U0001f4ca <b>STANDARD SETUP</b> \u2014 moved 2\u00a2+, confirmed live edge"
     else:
         tier_line = "\U0001f3af <b>PRIME SETUP</b> \u2014 fresh entry"
@@ -204,7 +216,6 @@ def format_poly_alert(r: dict, tier: str = "PRIME") -> str:
     # weigh, not yet trusted alone -- same thresholds as _crash_tier() in
     # database.py so this always matches what gets stored.
     crash_line = None
-    crash_cents = abs(mom)
     # Threshold was 20c -- STANDARD_15C (added 2026-09-04) actually cuts
     # at 15c, so a real 15-19.99c qualifier showed up in Telegram as a
     # plain STANDARD signal with no visual flag at all, indistinguishable
