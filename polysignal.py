@@ -576,7 +576,7 @@ tr:hover td{background:var(--surf)}
 .modal{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:22px;width:400px;max-width:95vw}
 .modal h3{font-size:15px;font-weight:600;margin-bottom:14px}
 .modal-foot{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
-.chart-wrap{background:var(--surf);border-radius:8px;padding:14px;margin-bottom:12px;height:180px}
+.chart-wrap{background:var(--surf);border-radius:8px;padding:16px 14px 10px;margin-bottom:12px;height:240px}
 .agrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}
 .pgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px}
 .pcard{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
@@ -1167,18 +1167,20 @@ function initCharts() {
     };
     // Baseline styled to recede -- a quiet, dashed reference line, not
     // competing for attention. STANDARD gets a real gradient glow under
-    // it, since that's the actual result worth looking at: it's the one
-    // beating the baseline, so it should read as the hero of the chart,
-    // not sit visually equal to the line it's supposed to be outperforming.
-    // STANDARD_15C is drawn but deliberately understated (thin, dotted,
-    // no fill) -- it's a real, backfilled tier worth watching, but it
-    // hasn't earned the same visual weight as STANDARD until it's proven
-    // itself live the same way STANDARD did.
+    // it, since that's the actual, longest-proven result. STANDARD_15C
+    // is now backfilled with a real historical sample rather than sitting
+    // empty, so it gets a real, visible line too -- solid, its own light
+    // fill, just slightly thinner than STANDARD's since it hasn't logged
+    // the same weeks of live-only data yet.
     const ctx = pnlEl.getContext('2d');
     const stdGlow = ctx.createLinearGradient(0, 0, 0, pnlEl.clientHeight || 260);
     stdGlow.addColorStop(0,   'rgba(59,130,246,.35)');
     stdGlow.addColorStop(0.6, 'rgba(59,130,246,.08)');
     stdGlow.addColorStop(1,   'rgba(59,130,246,0)');
+    const std15Glow = ctx.createLinearGradient(0, 0, 0, pnlEl.clientHeight || 260);
+    std15Glow.addColorStop(0,   'rgba(34,197,94,.22)');
+    std15Glow.addColorStop(0.6, 'rgba(34,197,94,.05)');
+    std15Glow.addColorStop(1,   'rgba(34,197,94,0)');
 
     const datasets=[{label:'Baseline (no filter)',data:fillOnto(paperTrades.pnl_series,allDates),
       borderColor:'#6b7280',borderWidth:1.5,borderDash:[4,3],
@@ -1194,29 +1196,34 @@ function initCharts() {
         order:1});
     }
     if(std15Series.length){
-      datasets.push({label:'STANDARD_15C (watching)',data:fillOnto(std15Series,allDates),
-        borderColor:'#22c55e',borderWidth:1.5,borderDash:[1,3],
-        backgroundColor:'transparent',fill:false,tension:.35,
-        pointRadius:0,pointHoverRadius:4,pointHitRadius:10,
-        pointBackgroundColor:'#22c55e',order:2});
+      datasets.push({label:'STANDARD_15C',data:fillOnto(std15Series,allDates),
+        borderColor:'#22c55e',borderWidth:2,
+        backgroundColor:std15Glow,fill:true,tension:.35,
+        pointRadius:0,pointHoverRadius:5,pointHitRadius:10,
+        pointBackgroundColor:'#22c55e',pointBorderColor:'#0d1117',pointBorderWidth:2,
+        order:2});
     }
+    const titleParts=['Baseline'];
+    if(stdSeries.length) titleParts.push('STANDARD');
+    if(std15Series.length) titleParts.push('STANDARD_15C');
     charts.pnl=new Chart(pnlEl,{type:'line',data:{
       labels:allDates,
       datasets:datasets
     },options:{...opts,
       interaction:{mode:'index',intersect:false},
       elements:{line:{capBezierPoints:true}},
+      layout:{padding:{top:2,right:6}},
       plugins:{...opts.plugins,
-        legend:{display:stdSeries.length>0,position:'top',align:'end',
-          labels:{color:'#9ca3af',font:{size:11},usePointStyle:true,pointStyle:'line',boxWidth:24,padding:16}},
-        title:{display:true,text:stdSeries.length?'STANDARD vs Baseline — Cumulative PnL ($)':'Baseline — Cumulative PnL ($)',
+        legend:{display:datasets.length>1,position:'top',align:'end',
+          labels:{color:'#9ca3af',font:{size:11},usePointStyle:true,pointStyle:'line',boxWidth:24,padding:14}},
+        title:{display:true,text:titleParts.join(' vs ')+' — Cumulative PnL ($)',
           color:'#e5e7eb',font:{size:13,weight:'600'},padding:{bottom:14}},
         tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,
           titleColor:'#e5e7eb',bodyColor:'#9ca3af',padding:10,cornerRadius:6,
           callbacks:{label:(c)=>` ${c.dataset.label}: $${c.parsed.y.toLocaleString()}`}}
       },
       scales:{
-        x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#6b7280',font:{size:10},maxRotation:0,autoSkip:true,autoSkipPadding:20}},
+        x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#6b7280',font:{size:10},maxRotation:0,autoSkip:true,autoSkipPadding:24}},
         y:{grid:{color:'rgba(255,255,255,.06)'},ticks:{color:'#6b7280',font:{size:10},callback:(v)=>'$'+v.toLocaleString()}}
       }
     }});

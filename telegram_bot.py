@@ -192,13 +192,20 @@ def format_poly_alert(r: dict, tier: str = "PRIME") -> str:
     # database.py so this always matches what gets stored.
     crash_line = None
     crash_cents = abs(mom)
-    if mom < 0 and crash_cents >= 20:
+    # Threshold was 20c -- STANDARD_15C (added 2026-09-04) actually cuts
+    # at 15c, so a real 15-19.99c qualifier showed up in Telegram as a
+    # plain STANDARD signal with no visual flag at all, indistinguishable
+    # from a much weaker 3c one. Lowered to match what's actually being
+    # tracked as its own tier now.
+    if mom < 0 and crash_cents >= 15:
         if crash_cents >= 60:
             crash_line = f"\U0001f4a5 <b>BIG CRASH</b> \u2014 fell {crash_cents:.0f}\u00a2 before entry (60\u00a2+ tier, strongest historically)"
         elif crash_cents >= 40:
             crash_line = f"\U0001f4a5 Crash \u2014 fell {crash_cents:.0f}\u00a2 before entry (40-59\u00a2 tier)"
-        else:
+        elif crash_cents >= 20:
             crash_line = f"\U0001f4a5 Crash \u2014 fell {crash_cents:.0f}\u00a2 before entry (20-39\u00a2 tier)"
+        else:
+            crash_line = f"\U0001f4a5 Crash \u2014 fell {crash_cents:.0f}\u00a2 before entry (15-19\u00a2 tier, STANDARD_15C)"
 
     if is_live:
         header = "\u26a1 POLYMARKET \u2014 LIVE BUY CLUSTER"
