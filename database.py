@@ -19,6 +19,9 @@ _db_url = os.environ.get("DATABASE_URL", "")
 if _db_url.startswith("postgres://"):
     # SQLAlchemy requires postgresql:// not postgres://
     _db_url = _db_url.replace("postgres://", "postgresql://", 1)
+if _db_url.startswith("postgresql://"):
+    # SQLAlchemy 2.1+ defaults to psycopg (v3); we ship psycopg2-binary
+    _db_url = _db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 DB_PATH = os.path.expanduser("~/polysignal.db")
 DATABASE_URL = _db_url or f"sqlite:///{DB_PATH}"
